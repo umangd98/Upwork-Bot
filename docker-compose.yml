@@ -1,0 +1,12 @@
+services:
+  upwork-bot:
+    build: .
+    container_name: upwork-bot
+    ports:
+      - "9876:9876"          # Only needed for first-time OAuth login
+    volumes:
+      - ./data:/app/data     # Persists tokens.json + jobs.db across restarts
+    env_file:
+      - .env
+    restart: unless-stopped
+    stop_grace_period: 30s   # Give APScheduler time to finish a running poll
