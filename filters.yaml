@@ -6,7 +6,7 @@
 
 # Free-text keyword search (Lucene partial syntax supported)
 # Examples: "python web scraping", "react OR vue", "machine learning"
-keywords: ""
+keywords: "zapier OR make.com OR Zapier OR n8n or Airtable"
 
 # Skills — canonical slug names, OR logic (job matches if ANY skill present)
 # Use lookup_skills.py to discover the correct slugs
@@ -23,11 +23,11 @@ experience_level: ""
 job_type: ""
 
 # Budget range for fixed-price jobs (dollars)
-budget_min: null
+budget_min: 1000
 budget_max: null
 
 # Hourly rate range (dollars/hour)
-hourly_rate_min: null
+hourly_rate_min: 35
 hourly_rate_max: null
 
 # Only show jobs from clients with verified payment method
@@ -42,16 +42,16 @@ days_posted: 3
 
 # Minimum hire rate: client.totalHires / client.totalPostedJobs
 # 0.0 = no filter, 0.5 = at least 50% of posted jobs led to a hire
-min_hire_rate: 0.0
+min_hire_rate: 0.7
 
 # Minimum total amount the client has spent on Upwork (dollars)
-min_total_spend: 0
+min_total_spend: 10000
 
 # Minimum number of reviews the client has received
-min_reviews: 0
+min_reviews: 5
 
 # Minimum average feedback/rating (0.0 – 5.0)
-min_rating: 0.0
+min_rating: 4.2
 
 # -------------------------------------------------------------------
 # PAGINATION
