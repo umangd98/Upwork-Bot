@@ -15,142 +15,128 @@ logger = logging.getLogger(__name__)
 # GraphQL query for marketplaceJobPostingsSearch
 # ---------------------------------------------------------------------------
 
-SEARCH_QUERY = """
-query marketplaceJobPostingsSearch(
-  $marketPlaceJobFilter: MarketplaceJobPostingsSearchFilter
-) {
-  marketplaceJobPostingsSearch(
-    marketPlaceJobFilter: $marketPlaceJobFilter
-    searchType: USER_JOBS_SEARCH
-  ) {
+# Response fragment — the fields we want for each job
+_RESPONSE_FIELDS = """
     totalCount
     edges {
       node {
-        id
-        title
-        description
-        ciphertext
-        publishedDateTime
-        type
-        contractorTier
-        totalApplicants
-        duration
-        durationLabel
-        engagement
-        amount {
-          amount
-          currencyCode
-        }
-        hourlyBudgetMin {
-          amount
-        }
-        hourlyBudgetMax {
-          amount
-        }
-        skills {
-          name
-          prettyName
-        }
-        ontologySkills {
-          skill {
-            name
-            prettyName
-          }
-        }
+        id title description ciphertext publishedDateTime createdDateTime
+        experienceLevel totalApplicants duration durationLabel engagement
+        hourlyBudgetType
+        amount { rawValue currency displayValue }
+        hourlyBudgetMin { rawValue currency displayValue }
+        hourlyBudgetMax { rawValue currency displayValue }
+        skills { name prettyName }
         client {
-          totalHires
-          totalPostedJobs
-          totalSpent {
-            amount
-            currencyCode
-          }
-          totalReviews
-          totalFeedback
-          verificationStatus
-          companyName
-          location {
-            city
-            country
-          }
+          totalHires totalPostedJobs
+          totalSpent { rawValue currency displayValue }
+          totalReviews totalFeedback verificationStatus
+          location { city country }
         }
       }
       cursor
     }
-    pageInfo {
-      endCursor
-      hasNextPage
-    }
-  }
-}
+    pageInfo { endCursor hasNextPage }
 """
 
 
 # ---------------------------------------------------------------------------
-# Build the filter variables from filters.yaml
+# Build the inline GraphQL query with all filters embedded
 # ---------------------------------------------------------------------------
 
-def _build_api_filter(filters: dict, cursor: str | None = None) -> dict:
-    """
-    Translate our YAML config into the GraphQL filter variables.
-    """
-    gql_filter: dict[str, Any] = {}
+def _gql_value(v: Any) -> str:
+    """Convert a Python value to a GraphQL inline literal."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        # Escape quotes in strings
+        escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(v, dict):
+        inner = ", ".join(f"{k}: {_gql_value(val)}" for k, val in v.items())
+        return f"{{ {inner} }}"
+    if isinstance(v, (list, tuple)):
+        inner = ", ".join(_gql_value(item) for item in v)
+        return f"[{inner}]"
+    return str(v)
 
-    # Keywords → searchExpression_eq
+
+def _build_inline_filter(filters: dict, offset: str = "0") -> str:
+    """
+    Build the complete inline filter block for the GraphQL query.
+
+    We inline everything (including pagination) because the Upwork API
+    returns a 500 error when pagination_eq is passed via variables.
+    """
+    parts: list[str] = []
+
+    # Keywords
     if filters["keywords"]:
-        gql_filter["searchExpression_eq"] = filters["keywords"]
+        parts.append(f'searchExpression_eq: {_gql_value(filters["keywords"])}')
 
-    # Skills → skillExpression_eq (comma-separated, OR logic)
+    # Skills (OR logic)
     if filters["skills"]:
-        gql_filter["skillExpression_eq"] = ",".join(filters["skills"])
+        skill_expr = ",".join(filters["skills"])
+        parts.append(f'skillExpression_eq: {_gql_value(skill_expr)}')
 
     # Experience level
     level = filters["experience_level"].upper()
     if level in ("ENTRY_LEVEL", "INTERMEDIATE", "EXPERT"):
-        gql_filter["experienceLevel_eq"] = level
+        parts.append(f"experienceLevel_eq: {level}")
 
     # Contract type
     jtype = filters["job_type"].upper()
     if jtype in ("HOURLY", "FIXED_PRICE"):
-        gql_filter["jobType_eq"] = jtype
+        parts.append(f"jobType_eq: {jtype}")
 
-    # Budget range (fixed-price)
+    # Budget range
     b_min = filters["budget_min"]
     b_max = filters["budget_max"]
     if b_min is not None or b_max is not None:
-        budget_range: dict[str, int] = {}
+        r_parts = []
         if b_min is not None:
-            budget_range["min"] = int(b_min)
+            r_parts.append(f"rangeStart: {int(b_min)}")
         if b_max is not None:
-            budget_range["max"] = int(b_max)
-        gql_filter["budgetRange_eq"] = budget_range
+            r_parts.append(f"rangeEnd: {int(b_max)}")
+        parts.append(f"budgetRange_eq: {{ {', '.join(r_parts)} }}")
 
     # Hourly rate range
     h_min = filters["hourly_rate_min"]
     h_max = filters["hourly_rate_max"]
     if h_min is not None or h_max is not None:
-        hourly_range: dict[str, int] = {}
+        r_parts = []
         if h_min is not None:
-            hourly_range["min"] = int(h_min)
+            r_parts.append(f"rangeStart: {int(h_min)}")
         if h_max is not None:
-            hourly_range["max"] = int(h_max)
-        gql_filter["hourlyRate_eq"] = hourly_range
+            r_parts.append(f"rangeEnd: {int(h_max)}")
+        parts.append(f"hourlyRate_eq: {{ {', '.join(r_parts)} }}")
 
     # Verified payment
     if filters["verified_payment_only"]:
-        gql_filter["verifiedPaymentOnly_eq"] = True
+        parts.append("verifiedPaymentOnly_eq: true")
 
-    # Days posted
-    if filters["days_posted"]:
-        gql_filter["daysPosted_eq"] = int(filters["days_posted"])
-
-    # Pagination (cursor-based)
+    # Pagination (inlined to avoid the variables bug)
     page_size = filters["page_size"]
-    pagination: dict[str, Any] = {"first": page_size}
-    if cursor:
-        pagination["after"] = cursor
-    gql_filter["pagination_eq"] = pagination
+    parts.append(f'pagination_eq: {{ after: "{offset}", first: {page_size} }}')
 
-    return {"marketPlaceJobFilter": gql_filter}
+    return ", ".join(parts)
+
+
+def _build_search_query(filters: dict, offset: str = "0") -> str:
+    """Build the complete GraphQL query with all filters inlined."""
+    filter_block = _build_inline_filter(filters, offset)
+    return (
+        "query {\n"
+        "  marketplaceJobPostingsSearch(\n"
+        f"    marketPlaceJobFilter: {{ {filter_block} }}\n"
+        "    searchType: USER_JOBS_SEARCH\n"
+        "  ) {\n"
+        f"    {_RESPONSE_FIELDS}\n"
+        "  }\n"
+        "}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +146,22 @@ def _build_api_filter(filters: dict, cursor: str | None = None) -> dict:
 def _passes_post_filters(job: dict, filters: dict) -> bool:
     """Return True if the job passes all post-filter thresholds."""
     client = job.get("client") or {}
+
+    # ── Days posted (not available as API filter on authenticated query) ──
+    days_posted = filters.get("days_posted")
+    if days_posted and days_posted > 0:
+        from datetime import datetime, timedelta, timezone
+        published = job.get("publishedDateTime") or job.get("createdDateTime")
+        if published:
+            try:
+                # Handle various datetime formats
+                pub_str = published.replace("Z", "+00:00")
+                pub_dt = datetime.fromisoformat(pub_str)
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days_posted)
+                if pub_dt < cutoff:
+                    return False
+            except (ValueError, TypeError):
+                pass  # If we can't parse, don't filter out
 
     # ── Hire rate ──
     min_hire_rate = filters["min_hire_rate"]
@@ -174,7 +176,7 @@ def _passes_post_filters(job: dict, filters: dict) -> bool:
     min_spend = filters["min_total_spend"]
     if min_spend > 0:
         spent_obj = client.get("totalSpent") or {}
-        spent_amount = float(spent_obj.get("amount", 0) or 0)
+        spent_amount = float(spent_obj.get("rawValue", 0) or 0)
         if spent_amount < min_spend:
             return False
 
@@ -211,27 +213,30 @@ def search_jobs() -> list[dict]:
     client = get_client()
 
     all_jobs: list[dict] = []
-    cursor: str | None = None
+    offset: str = "0"
     page = 0
     max_pages = 5  # safety cap
 
     while page < max_pages:
         page += 1
-        variables = _build_api_filter(filters, cursor)
-        logger.info("Fetching page %d (cursor=%s) …", page, cursor or "start")
+        query = _build_search_query(filters, offset)
+        logger.info("Fetching page %d (offset=%s) …", page, offset)
 
         try:
-            result = execute_graphql(client, SEARCH_QUERY, variables)
+            result = execute_graphql(client, query, {})
         except Exception:
             logger.exception("GraphQL request failed on page %d", page)
             break
 
-        search_data = (result or {}).get("data", {}).get(
-            "marketplaceJobPostingsSearch", {}
-        )
+        search_data = ((result or {}).get("data") or {}).get(
+            "marketplaceJobPostingsSearch"
+        ) or {}
         edges = search_data.get("edges") or []
         page_info = search_data.get("pageInfo") or {}
         total = search_data.get("totalCount", "?")
+
+        if result and result.get("errors"):
+            logger.warning("GraphQL errors: %s", result["errors"])
 
         logger.info(
             "Page %d: received %d edges (total available: %s)",
@@ -246,9 +251,12 @@ def search_jobs() -> list[dict]:
                 node["job_url"] = f"https://www.upwork.com/jobs/~{cipher}" if cipher else ""
                 all_jobs.append(node)
 
-        # Advance cursor
-        if page_info.get("hasNextPage") and edges:
-            cursor = page_info.get("endCursor") or edges[-1].get("cursor")
+        # Advance cursor (endCursor is a numeric string offset like "10", "20")
+        if page_info.get("hasNextPage"):
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                break
+            offset = cursor
         else:
             break
 

@@ -31,24 +31,18 @@ def _format_job(job: dict) -> dict[str, Any]:
     total_posted = client.get("totalPostedJobs") or 0
     hire_rate = round(total_hires / total_posted, 2) if total_posted > 0 else 0
 
-    # Collect skills from both legacy and ontology fields
+    # Collect skills
     skills: list[str] = []
     for s in job.get("skills") or []:
         name = s.get("prettyName") or s.get("name")
         if name:
             skills.append(name)
-    if not skills:
-        for os_item in job.get("ontologySkills") or []:
-            sk = os_item.get("skill") or {}
-            name = sk.get("prettyName") or sk.get("name")
-            if name:
-                skills.append(name)
 
     # Budget display
     amount_obj = job.get("amount") or {}
-    budget = amount_obj.get("amount")
-    hourly_min = (job.get("hourlyBudgetMin") or {}).get("amount")
-    hourly_max = (job.get("hourlyBudgetMax") or {}).get("amount")
+    budget = amount_obj.get("displayValue") or amount_obj.get("rawValue")
+    hourly_min = (job.get("hourlyBudgetMin") or {}).get("displayValue") or (job.get("hourlyBudgetMin") or {}).get("rawValue")
+    hourly_max = (job.get("hourlyBudgetMax") or {}).get("displayValue") or (job.get("hourlyBudgetMax") or {}).get("rawValue")
 
     hourly_range = None
     if hourly_min is not None or hourly_max is not None:
@@ -64,23 +58,22 @@ def _format_job(job: dict) -> dict[str, Any]:
         "url": job.get("job_url", ""),
         "description": (job.get("description") or "")[:500],
         "posted_at": job.get("publishedDateTime", ""),
-        "type": job.get("type", ""),
-        "experience_level": job.get("contractorTier", ""),
+        "job_type": job.get("hourlyBudgetType", ""),
+        "experience_level": job.get("experienceLevel", ""),
         "duration": job.get("durationLabel") or job.get("duration", ""),
         "engagement": job.get("engagement", ""),
         "budget": budget,
         "hourly_range": hourly_range,
-        "currency": amount_obj.get("currencyCode", "USD"),
+        "currency": amount_obj.get("currency", "USD"),
         "total_applicants": job.get("totalApplicants"),
         "skills": skills,
         "client": {
-            "company": client.get("companyName"),
             "location": f"{location.get('city', '')}, {location.get('country', '')}".strip(", "),
             "total_hires": total_hires,
             "total_posted_jobs": total_posted,
             "hire_rate": hire_rate,
-            "total_spent": float(spent_obj.get("amount", 0) or 0),
-            "total_spent_currency": spent_obj.get("currencyCode", "USD"),
+            "total_spent": spent_obj.get("displayValue") or float(spent_obj.get("rawValue", 0) or 0),
+            "total_spent_currency": spent_obj.get("currency", "USD"),
             "total_reviews": client.get("totalReviews") or 0,
             "rating": client.get("totalFeedback") or 0,
             "verified": client.get("verificationStatus", ""),
