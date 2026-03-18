@@ -117,6 +117,11 @@ def _build_inline_filter(filters: dict, offset: str = "0") -> str:
     if filters["verified_payment_only"]:
         parts.append("verifiedPaymentOnly_eq: true")
 
+    # Client locations (country/city, OR logic)
+    if filters["locations"]:
+        loc_list = ", ".join(_gql_value(loc) for loc in filters["locations"])
+        parts.append(f"locations_any: [{loc_list}]")
+
     # Pagination (inlined to avoid the variables bug)
     page_size = filters["page_size"]
     parts.append(f'pagination_eq: {{ after: "{offset}", first: {page_size} }}')

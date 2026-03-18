@@ -48,6 +48,7 @@ def load_filters() -> dict:
         "hourly_rate_min": raw.get("hourly_rate_min"),
         "hourly_rate_max": raw.get("hourly_rate_max"),
         "verified_payment_only": raw.get("verified_payment_only", True),
+        "locations": raw.get("locations") or [],
         "days_posted": raw.get("days_posted", 3),
         # Post-filters
         "min_hire_rate": float(raw.get("min_hire_rate", 0)),

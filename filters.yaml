@@ -33,6 +33,15 @@ hourly_rate_max: null
 # Only show jobs from clients with verified payment method
 verified_payment_only: true
 
+# Filter by client country/city (OR logic — matches if client is in ANY listed location)
+# Use full country names or city names as they appear on Upwork
+# Examples: "United States", "United Kingdom", "Canada", "Australia", "Germany"
+locations:
+  - United States
+  - United Kingdom
+  - Canada
+  - Australia
+
 # Only show jobs posted within the last N days (1-30)
 days_posted: 3
 
