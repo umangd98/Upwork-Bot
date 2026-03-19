@@ -253,6 +253,7 @@ def search_jobs() -> list[dict]:
             if _passes_post_filters(node, filters):
                 # Attach a convenience URL
                 cipher = node.get("ciphertext", "")
+                cipher = cipher.lstrip("~")
                 node["job_url"] = f"https://www.upwork.com/jobs/~{cipher}" if cipher else ""
                 all_jobs.append(node)
 
