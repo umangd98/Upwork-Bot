@@ -24,6 +24,10 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 TOKEN_FILE = os.path.join(DATA_DIR, "tokens.json")
 DB_FILE = os.path.join(DATA_DIR, "jobs.db")
 FILTERS_FILE = os.path.join(BASE_DIR, "filters.yaml")
+METRICS_FILE = os.path.join(DATA_DIR, "profile_metrics.json")
+
+# Profile metrics retention (days to keep daily snapshots)
+METRICS_RETENTION_DAYS: int = int(os.getenv("METRICS_RETENTION_DAYS", "90"))
 
 # Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)

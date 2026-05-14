@@ -13,6 +13,7 @@ import config
 import db
 import filters
 import notifier
+import profile_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,17 @@ def poll_cycle() -> None:
     logger.info("✅ Poll cycle complete. Delivered %d notification(s).", delivered)
 
 
+def metrics_cycle() -> None:
+    """Fetch today's profile stats snapshot and persist it to JSON."""
+    logger.info("⏳ Fetching profile metrics …")
+    try:
+        snapshot = profile_metrics.fetch_profile_metrics()
+        profile_metrics.save_metrics(snapshot)
+        logger.info("✅ Profile metrics saved for %s.", snapshot["date"])
+    except Exception:
+        logger.exception("Profile metrics fetch failed — will retry next run.")
+
+
 def _job_listener(event):
     if event.exception:
         logger.error("Scheduled job crashed: %s", event.exception)
@@ -83,11 +95,32 @@ def start_scheduler() -> None:
         misfire_grace_time=300,
     )
 
-    # Run one cycle immediately on start-up
+    # Run one poll cycle immediately on start-up
     scheduler.add_job(
         poll_cycle,
         trigger="date",          # run once, right now
         id="upwork_poll_initial",
+        replace_existing=True,
+    )
+
+    # Daily cron: fetch profile metrics at midnight UTC
+    scheduler.add_job(
+        metrics_cycle,
+        trigger="cron",
+        hour=0,
+        minute=0,
+        id="profile_metrics_daily",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+
+    # Also run one metrics fetch immediately on start-up
+    scheduler.add_job(
+        metrics_cycle,
+        trigger="date",
+        id="profile_metrics_initial",
         replace_existing=True,
     )
 
