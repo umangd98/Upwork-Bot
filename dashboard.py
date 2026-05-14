@@ -16,6 +16,7 @@ from datetime import datetime
 from functools import wraps
 
 from flask import Flask, Response, redirect, render_template_string, request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
 import profile_metrics
@@ -23,6 +24,9 @@ import profile_metrics
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+# Trust the X-Forwarded-Proto header from App Platform's load balancer so
+# that Flask constructs https:// redirect URLs instead of http://.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 # ---------------------------------------------------------------------------
 # Optional Basic Auth
@@ -137,7 +141,7 @@ TEMPLATE = """<!DOCTYPE html>
     </div>
     <form method="POST" action="/metrics/refresh">
       <button class="btn" type="submit"
-        onclick="this.disabled=true;this.textContent='Refreshing\u2026'">
+        onclick="setTimeout(()=>{this.disabled=true;this.textContent='Refreshing\u2026'},0)">
         &#8635;&nbsp;Refresh Now
       </button>
     </form>
