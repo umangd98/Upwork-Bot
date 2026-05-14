@@ -7,7 +7,7 @@ Runs the search → filter → dedup → notify pipeline on a fixed interval.
 import logging
 
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import config
 import db
@@ -75,12 +75,12 @@ def _job_listener(event):
         logger.debug("Scheduled job finished successfully.")
 
 
-def start_scheduler() -> None:
-    """Configure and start the blocking scheduler."""
+def start_scheduler() -> BackgroundScheduler:
+    """Configure and start the background scheduler. Returns the instance."""
     interval = config.POLL_INTERVAL_MINUTES
     logger.info("🚀 Starting scheduler — polling every %d minute(s).", interval)
 
-    scheduler = BlockingScheduler()
+    scheduler = BackgroundScheduler()
 
     scheduler.add_listener(_job_listener, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
 
@@ -124,7 +124,6 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
-    try:
-        scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Scheduler shut down.")
+    scheduler.start()
+    logger.info("Scheduler started in background.")
+    return scheduler

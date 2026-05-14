@@ -72,10 +72,12 @@ def main() -> None:
             "Set it in .env to enable webhook delivery."
         )
 
-    # ── Step 3: Start scheduler ──
-    logger.info("Tokens OK. Starting the polling scheduler.")
+    # ── Step 3: Start scheduler (background) + dashboard (main thread) ──
+    logger.info("Tokens OK. Starting scheduler and dashboard.")
     from scheduler import start_scheduler
-    start_scheduler()
+    from dashboard import run_dashboard
+    start_scheduler()   # non-blocking; runs in daemon threads
+    run_dashboard()     # blocks main thread; serves HTTP on AUTH_SERVER_PORT
 
 
 if __name__ == "__main__":

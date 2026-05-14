@@ -29,6 +29,10 @@ METRICS_FILE = os.path.join(DATA_DIR, "profile_metrics.json")
 # Profile metrics retention (days to keep daily snapshots)
 METRICS_RETENTION_DAYS: int = int(os.getenv("METRICS_RETENTION_DAYS", "90"))
 
+# Dashboard basic auth — set DASHBOARD_PASSWORD to enable (username: admin)
+# Leave empty for open access (fine for private/internal deployments)
+DASHBOARD_PASSWORD: str = os.getenv("DASHBOARD_PASSWORD", "")
+
 # Ensure data directory exists
 os.makedirs(DATA_DIR, exist_ok=True)
 
