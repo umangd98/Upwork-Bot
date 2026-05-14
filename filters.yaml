@@ -51,13 +51,13 @@ days_posted: 3
 
 # Minimum hire rate: client.totalHires / client.totalPostedJobs
 # 0.0 = no filter, 0.5 = at least 50% of posted jobs led to a hire
-min_hire_rate: 0.7
+min_hire_rate: 0.4
 
 # Minimum total amount the client has spent on Upwork (dollars)
-min_total_spend: 10000
+min_total_spend: 1000
 
 # Minimum number of reviews the client has received
-min_reviews: 5
+min_reviews: 1
 
 # Minimum average feedback/rating (0.0 – 5.0)
 min_rating: 4.2
