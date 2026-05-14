@@ -83,6 +83,8 @@ def fetch_profile_metrics() -> dict:
             f"Raw response: {result}"
         ) from exc
 
+    logger.info("Raw profileStats from Upwork API:\n%s", json.dumps(stats, indent=2))
+
     now_utc = datetime.now(timezone.utc)
     snapshot = {
         "date": now_utc.strftime("%Y-%m-%d"),
