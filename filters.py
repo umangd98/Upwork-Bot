@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 import config
+import scoring
 from upwork_client import execute_graphql, get_client
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,12 @@ def search_jobs() -> list[dict]:
         for edge in edges:
             node = edge.get("node") or {}
             if _passes_post_filters(node, filters):
+                node["fit_score"], node["fit_reasons"] = scoring.score_job(
+                    node, filters["scoring"]
+                )
+                if node["fit_score"] < filters["scoring"].get("min_score", 0):
+                    logger.debug("Skipped (score %d): %s", node["fit_score"], node.get("title"))
+                    continue
                 # Attach a convenience URL
                 cipher = node.get("ciphertext", "")
                 cipher = cipher.lstrip("~")

@@ -6,7 +6,7 @@
 
 # Free-text keyword search (Lucene partial syntax supported)
 # Examples: "python web scraping", "react OR vue", "machine learning"
-keywords: "zapier OR make.com OR Zapier OR n8n or Airtable"
+keywords: "n8n OR \"make.com\" OR zapier OR \"AI agent\" OR \"AI agents\" OR \"AI automation\" OR \"workflow automation\" OR GoHighLevel OR \"LLM\" OR \"Claude\" OR \"OpenAI\""
 
 # Skills — canonical slug names, OR logic (job matches if ANY skill present)
 # Use lookup_skills.py to discover the correct slugs
@@ -61,6 +61,16 @@ min_reviews: 1
 
 # Minimum average feedback/rating (0.0 – 5.0)
 min_rating: 4.2
+
+# -------------------------------------------------------------------
+# FIT SCORING (scoring.py) — 0-100 score vs. your profile
+# -------------------------------------------------------------------
+# Jobs scoring below min_score are dropped before notifying. 0 = off.
+scoring:
+  min_score: 50
+  min_fixed_budget: 1000
+  min_hourly: 35
+  max_applicants: 20
 
 # -------------------------------------------------------------------
 # PAGINATION

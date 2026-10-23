@@ -55,6 +55,8 @@ def _format_job(job: dict) -> dict[str, Any]:
 
     return {
         "title": job.get("title", ""),
+        "fit_score": job.get("fit_score"),
+        "fit_reasons": job.get("fit_reasons", []),
         "url": job.get("job_url", ""),
         "description": (job.get("description") or "")[:500],
         "posted_at": job.get("publishedDateTime", ""),

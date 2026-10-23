@@ -63,6 +63,8 @@ def load_filters() -> dict:
         "min_total_spend": float(raw.get("min_total_spend", 0)),
         "min_reviews": int(raw.get("min_reviews", 0)),
         "min_rating": float(raw.get("min_rating", 0)),
+        # Fit scoring (see scoring.py)
+        "scoring": raw.get("scoring") or {},
         # Pagination
         "page_size": min(int(raw.get("page_size", 50)), 50),
     }
