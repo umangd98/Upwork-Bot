@@ -23,11 +23,11 @@ experience_level: ""
 job_type: ""
 
 # Budget range for fixed-price jobs (dollars)
-budget_min: 1000
+budget_min: 800
 budget_max: null
 
 # Hourly rate range (dollars/hour)
-hourly_rate_min: 35
+hourly_rate_min: 40
 hourly_rate_max: null
 
 # Only show jobs from clients with verified payment method
@@ -41,6 +41,7 @@ locations:
   - United Kingdom
   - Canada
   - Australia
+  - United Arab Emirates
 
 # Only show jobs posted within the last N days (1-30)
 days_posted: 3
@@ -68,9 +69,28 @@ min_rating: 4.2
 # Jobs scoring below min_score are dropped before notifying. 0 = off.
 scoring:
   min_score: 50
-  min_fixed_budget: 1000
-  min_hourly: 35
+  min_fixed_budget: 800
+  min_hourly: 40
   max_applicants: 20
+  # Budget -> weeks we can deliver in. We only bid when the job's scope fits
+  # the tier for its budget (higher budget = more time). Sorted ascending.
+  budget_tiers:
+    - {up_to: 1500, weeks: 1}
+    - {up_to: 2000, weeks: 1.5}
+    - {up_to: 3000, weeks: 2}
+    - {up_to: 4000, weeks: 3}
+  # Fixed budgets above the last tier are never auto-bid: they need a custom
+  # scope from you and your approval first.
+  manual_review_above: 4000
+  # Brand-new clients (no spend, no reviews) skip the client-history filters
+  # when the job is well budgeted OR the post shows buyer credibility
+  # (long description that names a website/company link).
+  new_client_bet:
+    enabled: true
+    min_fixed_budget: 1000
+    min_hourly: 40
+    min_description_chars: 800
+  daily_apply_cap: 10
 
 # -------------------------------------------------------------------
 # PAGINATION

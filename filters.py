@@ -169,6 +169,12 @@ def _passes_post_filters(job: dict, filters: dict) -> bool:
             except (ValueError, TypeError):
                 pass  # If we can't parse, don't filter out
 
+    # ── New client with no history: a bet if the job looks credible ──
+    spent_raw = float(((client.get("totalSpent") or {}).get("rawValue", 0)) or 0)
+    is_new = spent_raw == 0 and not (client.get("totalReviews") or 0)
+    if is_new and scoring.is_credible_new_client(job, filters.get("scoring")):
+        return True
+
     # ── Hire rate ──
     min_hire_rate = filters["min_hire_rate"]
     if min_hire_rate > 0:

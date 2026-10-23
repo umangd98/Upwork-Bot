@@ -19,11 +19,46 @@ _DEFAULTS: dict[str, Any] = {
         "virtual assistant", "executive assistant", "data entry", "cold call",
         "appointment setter", "sdr", "social media manager", "graphic design",
         "wordpress", "wix", "shopify theme",
+        "tutor", "tutoring", "mentor", "coaching", "teach me", "trainer",
     ],
-    "min_fixed_budget": 1000,
+    "min_fixed_budget": 800,
     "min_hourly": 35,
     "max_applicants": 20,
+    "budget_tiers": [
+        {"up_to": 1500, "weeks": 1},
+        {"up_to": 2000, "weeks": 1.5},
+        {"up_to": 3000, "weeks": 2},
+        {"up_to": 4000, "weeks": 3},
+    ],
 }
+
+
+def weeks_for_budget(budget: float, cfg: dict | None = None) -> float | None:
+    """Weeks of delivery time our rules allow for a fixed budget (None = above all tiers: needs manual scope + approval, never auto-bid)."""
+    tiers = {**_DEFAULTS, **(cfg or {})}["budget_tiers"]
+    for tier in sorted(tiers, key=lambda t: t["up_to"]):
+        if budget <= tier["up_to"]:
+            return tier["weeks"]
+    return None
+
+
+_URL_RE = re.compile(r"(https?://|www\.|\b[a-z0-9-]+\.(com|io|co|ai|net|org|app)\b)", re.I)
+
+
+def is_credible_new_client(job: dict, cfg: dict | None = None) -> bool:
+    """True if a client with no history is worth a bet: well budgeted, or a detailed post naming a website."""
+    bet = ((cfg or {}).get("new_client_bet")) or {}
+    if not bet.get("enabled"):
+        return False
+    fixed = _amount(job.get("amount"))
+    hmin, hmax = _amount(job.get("hourlyBudgetMin")), _amount(job.get("hourlyBudgetMax"))
+    hourly_top = hmax if hmax is not None else hmin
+    if fixed is not None and fixed >= bet.get("min_fixed_budget", 1000):
+        return True
+    if hourly_top is not None and hourly_top >= bet.get("min_hourly", 40):
+        return True
+    desc = job.get("description") or ""
+    return len(desc) >= bet.get("min_description_chars", 800) and bool(_URL_RE.search(desc))
 
 
 def _text(job: dict) -> str:
