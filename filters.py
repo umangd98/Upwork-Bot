@@ -213,6 +213,10 @@ def _passes_post_filters(job: dict, filters: dict) -> bool:
 # Main search function
 # ---------------------------------------------------------------------------
 
+class SearchError(RuntimeError):
+    """The first page of the job search failed (expired login, API error ...)."""
+
+
 def search_jobs() -> list[dict]:
     """
     Query the Upwork API, paginate through results, apply post-filters,
@@ -236,8 +240,10 @@ def search_jobs() -> list[dict]:
 
         try:
             result = execute_graphql(client, query, {})
-        except Exception:
+        except Exception as exc:
             logger.exception("GraphQL request failed on page %d", page)
+            if page == 1:
+                raise SearchError(f"Job search request failed: {exc}") from exc
             break
 
         search_data = ((result or {}).get("data") or {}).get(
@@ -249,6 +255,9 @@ def search_jobs() -> list[dict]:
 
         if result and result.get("errors"):
             logger.warning("GraphQL errors: %s", result["errors"])
+            if page == 1 and not edges:
+                msgs = "; ".join(str(e.get("message", e)) for e in result["errors"])[:300]
+                raise SearchError(f"Upwork rejected the job search: {msgs}")
 
         logger.info(
             "Page %d: received %d edges (total available: %s)",

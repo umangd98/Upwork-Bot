@@ -5,6 +5,7 @@ Runs the search → filter → dedup → notify pipeline on a fixed interval.
 """
 
 import logging
+import time
 
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -13,6 +14,7 @@ import applied_jobs
 import config
 import db
 import filters
+import heartbeat
 import notifier
 import pipeline
 import profile_metrics
@@ -20,20 +22,14 @@ import profile_metrics
 logger = logging.getLogger(__name__)
 
 
-def poll_cycle() -> None:
-    """Single poll iteration: search, dedup, notify, prune."""
-    logger.info("⏳ Starting poll cycle …")
-
-    # 1. Search & post-filter
-    try:
-        jobs = filters.search_jobs()
-    except Exception:
-        logger.exception("Search failed — skipping this cycle.")
-        return
+def _run_poll() -> tuple[int, int, int]:
+    """One search → dedup → process pass. Returns (matched, new, handled); raises on failure."""
+    # 1. Search & post-filter (raises SearchError if even the first page fails)
+    jobs = filters.search_jobs()
 
     if not jobs:
         logger.info("No matching jobs found this cycle.")
-        return
+        return 0, 0, 0
 
     # 2. Dedup — only keep jobs we haven't notified about yet
     job_ids = [j["id"] for j in jobs if j.get("id")]
@@ -42,7 +38,7 @@ def poll_cycle() -> None:
 
     if not new_jobs:
         logger.info("All %d matching job(s) were already notified.", len(jobs))
-        return
+        return len(jobs), 0, 0
 
     logger.info("%d new job(s) to notify (out of %d matches).", len(new_jobs), len(jobs))
 
@@ -56,7 +52,8 @@ def poll_cycle() -> None:
     handled = pipeline.process_jobs(new_jobs, app_filters)
 
     # 3b. Optional legacy webhook (kept for backwards compatibility)
-    delivered = notifier.notify_jobs(new_jobs) if config.WEBHOOK_URL else 0
+    if config.WEBHOOK_URL:
+        notifier.notify_jobs(new_jobs)
 
     # 4. Mark as seen only what the pipeline handled; transient failures
     #    (e.g. the letter API was down) are retried next cycle.
@@ -66,6 +63,25 @@ def poll_cycle() -> None:
     db.prune_old_entries(days=30)
 
     logger.info("✅ Poll cycle complete. Handled %d job(s).", len(handled))
+    return len(jobs), len(new_jobs), len(handled)
+
+
+def poll_cycle() -> None:
+    """Single poll iteration, wrapped so every run is recorded for the heartbeat."""
+    logger.info("⏳ Starting poll cycle …")
+    started = time.time()
+    matched = new = handled = 0
+    error = None
+    try:
+        matched, new, handled = _run_poll()
+    except Exception as exc:
+        logger.exception("Poll cycle failed.")
+        error = f"{type(exc).__name__}: {exc}"
+    app_filters = config.load_filters()
+    heartbeat.record_poll(matched, new, handled, time.time() - started, error)
+    if error:
+        heartbeat.alert_error(error, app_filters)
+    heartbeat.maybe_beat(app_filters)
 
 
 def metrics_cycle() -> None:
@@ -132,6 +148,14 @@ def start_scheduler() -> BackgroundScheduler:
         metrics_cycle,
         trigger="date",
         id="profile_metrics_initial",
+        replace_existing=True,
+    )
+
+    # Tell Slack the bot is up and logged in (runs in the background; never blocks start-up).
+    scheduler.add_job(
+        lambda: heartbeat.send_started(config.load_filters()),
+        trigger="date",
+        id="heartbeat_started",
         replace_existing=True,
     )
 

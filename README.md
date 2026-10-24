@@ -274,6 +274,14 @@ session is open and idle, expires after 7 days, and a click waits up to one loop
 and return 403 if the secret isn't configured. Button calls pass `?notify=0` so n8n updates the
 original Slack message instead of posting a second one.
 
+### Heartbeat: knowing the bot is alive
+Quiet is normal (only jobs that fit your rules produce alerts), so the bot also reports on itself:
+- **🟢 started** once, when the bot is (re)started and logged in. After a deploy this also confirms your login worked.
+- **💓 running** every `apply.heartbeat_hours` (default 6; 0 = off): polls, jobs matched / new, outcomes, jobs waiting for you, cap used.
+- **🚨 polling is failing** if a poll fails (expired login, Upwork errors); at most one per `apply.error_alert_hours` (default 2).
+- `GET /api/status` also shows `heartbeat.last_poll_at`, whether it succeeded, and the counts since the last summary.
+The n8n workflow in `n8n/` renders these; re-import it (or paste the two `Build ... message` Code nodes) after updating.
+
 ### Duplicate protection and the organization context
 Proposals are submitted **inside the agency's organization** (the SDK sends `X-Upwork-API-TenantId`
 = `UPWORK_AGENCY_ORG_ID`), so the agency's Connects are spent, not the personal account's. Search and

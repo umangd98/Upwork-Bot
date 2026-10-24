@@ -262,6 +262,18 @@ def recent_applications(days: int = 14) -> list[dict]:
         conn.close()
 
 
+def counts_since(iso_cutoff: str | None) -> dict:
+    """Applications created since the cutoff, by current status."""
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM applications WHERE created_at >= ? GROUP BY status",
+            (iso_cutoff or "",)).fetchall()
+        return {r["status"]: int(r["n"]) for r in rows}
+    finally:
+        conn.close()
+
+
 def counts_by_status() -> dict:
     conn = _connect()
     try:

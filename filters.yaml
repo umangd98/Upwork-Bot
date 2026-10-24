@@ -96,6 +96,8 @@ scoring:
 # -------------------------------------------------------------------
 apply:
   daily_cap: 10               # max proposals in any rolling 24 hours
+  heartbeat_hours: 6          # Slack "bot is running" summary every N hours (0 = off)
+  error_alert_hours: 2        # at most one poll-failure alert per N hours
   max_per_cycle: 10           # max new jobs drafted per 30-min poll (limits API spend and Slack flood)
   auto_below_budget: 3000     # fixed jobs under this apply automatically
                               # (3,000 and above wait for your Slack approval)

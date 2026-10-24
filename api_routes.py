@@ -28,6 +28,7 @@ import applied_jobs
 import config
 import db
 import events
+import heartbeat
 import pipeline
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,8 @@ def _notify() -> bool:
 def status():
     cap = int((_filters().get("apply") or {}).get("daily_cap", 10))
     return jsonify({"applied_in_last_24h": db.applications_in_window(24), "daily_cap": cap,
-                    "backend": config.APPLY_BACKEND, "by_status": db.counts_by_status()})
+                    "backend": config.APPLY_BACKEND, "by_status": db.counts_by_status(),
+                    "heartbeat": heartbeat.snapshot()})
 
 
 @api.get("/applications")
