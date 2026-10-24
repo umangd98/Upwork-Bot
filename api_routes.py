@@ -98,10 +98,14 @@ def debug_schema():
 @api.get("/debug/proposals")
 @_requires_secret
 def debug_proposals():
-    """Run the already-applied lookup once and show Upwork's full answer: ?job_ids=1,2"""
+    """Run the already-applied lookup once and show Upwork's full answer: ?job_ids=1,2&first=25"""
     ids = [i for i in request.args.get("job_ids", "").split(",") if i.strip()][:25]
     try:
-        return jsonify({"ok": True, **applied_jobs.diagnose(ids)})
+        first = max(1, min(int(request.args.get("first", 25)), 200))
+    except ValueError:
+        return jsonify({"ok": False, "message": "first must be a number."}), 400
+    try:
+        return jsonify({"ok": True, **applied_jobs.diagnose(ids, first)})
     except Exception as exc:
         return jsonify({"ok": False, "message": f"Upwork request failed: {exc}"}), 502
 

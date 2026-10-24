@@ -127,13 +127,18 @@ def check_jobs(job_ids: list[str]) -> bool:
     return True
 
 
-def refresh_recent(limit: int = 100) -> bool:
+SAFE_PAGE = 25   # a page size known to be accepted by Upwork
+
+
+def refresh_recent(limit: int = 50) -> bool:
     """Remember the titles of our latest proposals (for repost warnings)."""
     try:
         client = _client()
         found: list[dict] = []
         for status in STATUSES_RECENT:
             part = _query(client, _base_filter(), limit, status)
+            if part is None and limit > SAFE_PAGE:
+                part = _query(client, _base_filter(), SAFE_PAGE, status)   # page size may be capped
             if part is None:
                 return False
             found.extend(part)
@@ -189,10 +194,10 @@ def type_info(name: str) -> dict:
     return execute_graphql(_client(), _TYPE_INFO, {"name": name})
 
 
-def diagnose(job_ids: list[str]) -> dict:
+def diagnose(job_ids: list[str], first: int = 25) -> dict:
     """Run the real lookup once per status and return everything Upwork said, errors included."""
     client = _client()
-    out = {"organization": config.UPWORK_AGENCY_ORG_ID or None, "sort": SORT, "by_status": {}}
+    out = {"organization": config.UPWORK_AGENCY_ORG_ID or None, "sort": SORT, "first": first, "by_status": {}}
     filter_obj = _base_filter()
     if job_ids:
         filter_obj["jobPostingIds_any"] = [str(j) for j in job_ids]
@@ -200,7 +205,7 @@ def diagnose(job_ids: list[str]) -> dict:
     found: dict[str, dict] = {}
     for status in STATUSES_ALL:
         result = execute_graphql(client, _QUERY, {
-            "filter": {**filter_obj, "status_eq": status}, "sort": SORT, "pagination": {"first": 25}})
+            "filter": {**filter_obj, "status_eq": status}, "sort": SORT, "pagination": {"first": first}})
         errors = (result or {}).get("errors")
         proposals = parse_proposals(result)
         out["by_status"][status] = {

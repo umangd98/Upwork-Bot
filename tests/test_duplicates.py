@@ -112,6 +112,8 @@ class TestAlreadyAppliedOnUpwork(Base):
             calls.append((query, variables))
             assert query.count("__type") <= 1, "Upwork rejects several __type lookups in one query"
             flt = variables["filter"]
+            if variables["pagination"]["first"] > getattr(self, "max_page", 10**6):
+                return {"errors": [{"message": "pagination.first is too large"}]}
             if "status_eq" not in flt:
                 return {"errors": [{"message": "Field 'status_eq' has coerced Null value for NonNull type"}]}
             if errors:
@@ -199,6 +201,16 @@ class TestAlreadyAppliedOnUpwork(Base):
         old = applied_jobs._cache["titles"]["ai business process automation engineer"]
         old["created_ms"] = 1_000_000_000_000                    # year 2001: outside the window
         self.assertIsNone(applied_jobs.similar_applied("AI Business Process Automation Engineer"))
+
+    def test_recent_titles_fall_back_to_a_smaller_page_if_the_size_is_capped(self):
+        self.max_page = 25                                     # Upwork rejects anything bigger
+        fake, calls = self._fake_upwork(proposals=[("9", "Capped Job")])
+        p1, p2 = self._patched(fake)
+        with p1, p2:
+            self.assertTrue(applied_jobs.refresh_recent())
+        sizes = [v["pagination"]["first"] for q, v in calls]
+        self.assertEqual(sizes[:2], [50, 25])                  # tried 50, retried with 25
+        self.assertIsNotNone(applied_jobs.similar_applied("Capped Job"))
 
     def test_title_match_forces_approval_and_warns(self):
         applied_jobs._cache.update(titles={"n8n automation x1": {"job_id": "OLD", "title": "n8n automation x1",
@@ -288,6 +300,16 @@ class TestDebugEndpoints(Base):
             applied_jobs.refresh_recent()
         self.assertTrue(calls)
         self.assertTrue(all("__type" not in q for q, v in calls))
+
+    def test_first_parameter_is_passed_and_validated(self):
+        fake, calls = TestAlreadyAppliedOnUpwork._fake_upwork(self)
+        p1, p2 = TestAlreadyAppliedOnUpwork._patched(self, fake)
+        with p1, p2:
+            body = self.client.get("/api/debug/proposals?first=7", headers=AUTH).get_json()
+            bad = self.client.get("/api/debug/proposals?first=abc", headers=AUTH)
+        self.assertEqual(body["first"], 7)
+        self.assertEqual({v["pagination"]["first"] for q, v in calls}, {7})
+        self.assertEqual(bad.status_code, 400)
 
     def test_upwork_failures_become_502_not_crashes(self):
         with mock.patch("applied_jobs.get_client", side_effect=RuntimeError("no token")):
