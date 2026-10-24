@@ -72,6 +72,11 @@ def main() -> None:
             "Set it in .env to enable webhook delivery."
         )
 
+    import applier
+    gaps = applier.missing_settings()
+    if gaps:
+        logger.warning("Applying will fail until these are set: %s", ", ".join(gaps))
+
     # ── Step 3: Start scheduler (background) + dashboard (main thread) ──
     logger.info("Tokens OK. Starting scheduler and dashboard.")
     from scheduler import start_scheduler

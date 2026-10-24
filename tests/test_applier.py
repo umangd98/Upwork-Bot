@@ -79,11 +79,26 @@ class TestApply(unittest.TestCase):
         self.assertNotIn("milestones", p)
         self.assertNotIn("estimatedDuration", p)
 
-    def test_contractor_fields_are_optional(self):
+    def test_payload_omits_contractor_fields_that_are_not_configured(self):
         config.UPWORK_FREELANCER_ODESK_ID = ""
+        p = applier.build_input(stored_app(), job("123", amount=1500), FILTERS)
+        self.assertEqual(p["selectedContractor"], {"id": "FREE1"})       # username is optional
         config.UPWORK_FREELANCER_ID = ""
-        fake, _ = self.run_apply(OK)
-        self.assertNotIn("selectedContractor", fake.calls[0][1]["input"])
+        p = applier.build_input(stored_app(), job("123", amount=1500), FILTERS)
+        self.assertNotIn("selectedContractor", p)
+
+    def test_missing_contractor_id_stops_before_calling_upwork(self):
+        config.UPWORK_FREELANCER_ID = ""
+        fake = Fake(OK)
+        with mock.patch("applier.execute_graphql", side_effect=fake):
+            with self.assertRaisesRegex(applier.ApplyError, "UPWORK_FREELANCER_ID"):
+                applier.apply(stored_app(), job("123", amount=1500), FILTERS)
+        self.assertEqual(fake.calls, [])                       # nothing was sent to Upwork
+        config.UPWORK_AGENCY_ORG_ID = ""
+        config.UPWORK_FREELANCER_ID = "FREE1"
+        with self.assertRaisesRegex(applier.ApplyError, "UPWORK_AGENCY_ORG_ID"):
+            with mock.patch("applier.execute_graphql", side_effect=fake):
+                applier.apply(stored_app(), job("123", amount=1500), FILTERS)
 
     def test_graphql_errors_become_apply_errors(self):
         with self.assertRaisesRegex(applier.ApplyError, "not authorized"):

@@ -104,8 +104,18 @@ mutation CreateJobProposal($input: CreateJobProposalInput!) {
 """
 
 
+def missing_settings() -> list[str]:
+    """Settings Upwork requires to attribute a proposal (selectedContractor.id is non-null)."""
+    required = {"UPWORK_AGENCY_ORG_ID": config.UPWORK_AGENCY_ORG_ID,
+                "UPWORK_FREELANCER_ID": config.UPWORK_FREELANCER_ID}
+    return [name for name, value in required.items() if not value]
+
+
 def apply(app: dict, job: dict, filters: dict) -> str:
     """Submit the proposal. Returns the new proposal id or raises ApplyError."""
+    missing = missing_settings()
+    if missing:
+        raise ApplyError("Not sent: these settings are empty on the bot: " + ", ".join(missing))
     payload = build_input(app, job, filters)
     client = get_client()
     try:
