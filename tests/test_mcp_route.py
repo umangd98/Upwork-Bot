@@ -343,3 +343,55 @@ class TestSendTestEvent(unittest.TestCase):
                          ["applied", "needs_approval", "dry_run", "cap_reached", "apply_failed", "queued"])
         self.assertTrue(all(p["title"].startswith("[TEST]") for p in sent))
         self.assertEqual(sent[4]["screening_questions"], ["(test) Why are you a fit?"])
+
+
+class TestProbeScript(unittest.TestCase):
+    def test_prints_nested_types_for_create_job_proposal(self):
+        import io
+        from contextlib import redirect_stdout
+        import check_apply_api as probe
+
+        def ref(name, kind="INPUT_OBJECT"):
+            return {"name": name, "kind": kind, "ofType": None}
+
+        def wrap_list(name):
+            return {"name": None, "kind": "LIST", "ofType": ref(name)}
+
+        types = {
+            "CreateJobProposalInput": [("jobReference", ref("String", "SCALAR")),
+                                       ("milestones", wrap_list("CreateProposalMilestone")),
+                                       ("selectedContractor", ref("CreateProposalSelectedContractor"))],
+            "CreateProposalMilestone": [("amount", ref("Float", "SCALAR")), ("description", ref("String", "SCALAR"))],
+            "CreateProposalSelectedContractor": [("id", ref("ID", "SCALAR")), ("oDeskUserID", ref("String", "SCALAR"))],
+        }
+
+        def fake(client, query, variables):
+            if "__type(name: \"Mutation\")" in query:
+                return {"data": {"__type": {"fields": [
+                    {"name": "createJobProposal", "args": [{"name": "input", "type": ref("CreateJobProposalInput")}]},
+                    {"name": "withdrawContractProposal", "args": []}]}}}
+            name = query.split('name: "')[1].split('"')[0]
+            return {"data": {"__type": {"kind": "INPUT_OBJECT", "enumValues": None, "inputFields": [
+                {"name": n, "type": t} for n, t in types[name]]}}}
+
+        buf = io.StringIO()
+        with mock.patch.object(probe, "get_client", return_value=object()), \
+             mock.patch.object(probe, "execute_graphql", side_effect=fake), redirect_stdout(buf):
+            code = probe.main()
+        out = buf.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("milestones: CreateProposalMilestone[]", out)
+        self.assertRegex(out, r"amount: Float")
+        self.assertRegex(out, r"oDeskUserID: String")
+        self.assertIn("withdrawContractProposal  (not needed)", out)
+
+    def test_reports_when_the_mutation_is_missing(self):
+        import io
+        from contextlib import redirect_stdout
+        import check_apply_api as probe
+        fake = lambda c, q, v: {"data": {"__type": {"fields": [{"name": "otherMutation", "args": []}]}}}
+        buf = io.StringIO()
+        with mock.patch.object(probe, "get_client", return_value=object()), \
+             mock.patch.object(probe, "execute_graphql", side_effect=fake), redirect_stdout(buf):
+            self.assertEqual(probe.main(), 1)
+        self.assertIn("NOT possible", buf.getvalue())

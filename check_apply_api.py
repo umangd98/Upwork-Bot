@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """
-check_apply_api.py — Does Upwork's GraphQL API let this app submit proposals?
+check_apply_api.py — Does Upwork's GraphQL API let this app submit proposals, and
+what exactly does createJobProposal expect?
 
-Read-only: runs two introspection queries and prints what it finds. Run it once on
-the deployed bot (it needs the saved OAuth token):
+Read-only: runs introspection queries only and prints the proposal mutations with
+their full input types, including nested ones (milestones, selectedContractor,
+questions, sri). Run it on the deployed bot:
 
     python check_apply_api.py
-
-If createJobProposal is listed, copy its input type's fields into applier.py's
-build_input(). If it is missing or the schema is hidden, auto-apply cannot work
-through the API and the bot falls back to showing the cover letter + job link in
-Slack for you to submit manually.
 """
 
 import json
@@ -18,14 +15,38 @@ import sys
 
 from upwork_client import execute_graphql, get_client
 
-MUTATIONS = '{ __type(name: "Mutation") { fields { name args { name type { name kind ofType { name } } } } } }'
+TYPE_REF = "name kind ofType { name kind ofType { name kind ofType { name kind } } }"
+MUTATIONS = '{ __type(name: "Mutation") { fields { name args { name type { %s } } } } }' % TYPE_REF
+
+
+def _unwrap(t: dict | None) -> tuple[str | None, str | None, bool]:
+    """Return (named type, its kind, is_list) through NON_NULL / LIST wrappers."""
+    is_list = False
+    while t:
+        if t.get("kind") == "LIST":
+            is_list = True
+        if t.get("name"):
+            return t["name"], t.get("kind"), is_list
+        t = t.get("ofType")
+    return None, None, is_list
 
 
 def _input_fields(client, type_name: str) -> list[dict]:
-    q = ('{ __type(name: "%s") { inputFields { name type { name kind '
-         'ofType { name kind ofType { name } } } } } }' % type_name)
+    q = '{ __type(name: "%s") { kind inputFields { name type { %s } } enumValues { name } } }' % (type_name, TYPE_REF)
     res = execute_graphql(client, q, {})
-    return (((res or {}).get("data") or {}).get("__type") or {}).get("inputFields") or []
+    t = ((res or {}).get("data") or {}).get("__type") or {}
+    if t.get("enumValues"):
+        return [{"name": "(enum) " + ", ".join(v["name"] for v in t["enumValues"]), "type": None}]
+    return t.get("inputFields") or []
+
+
+def _print_type(client, type_name: str, indent: int, seen: set, depth: int) -> None:
+    for f in _input_fields(client, type_name):
+        name, kind, is_list = _unwrap(f.get("type"))
+        label = f"{name}{'[]' if is_list else ''}" if name else ""
+        print(f"{'  ' * indent}{f['name']}: {label}")
+        if kind == "INPUT_OBJECT" and name not in seen and depth > 0:
+            _print_type(client, name, indent + 1, seen | {name}, depth - 1)
 
 
 def main() -> int:
@@ -41,16 +62,14 @@ def main() -> int:
         print("All mutations:", ", ".join(f["name"] for f in fields) or "(none)")
         return 1
     for f in hits:
+        if f["name"] != "createJobProposal":
+            print(f"MUTATION {f['name']}  (not needed)")
+            continue
         print(f"MUTATION {f['name']}")
         for a in f.get("args") or []:
-            t = a["type"]
-            tname = t.get("name") or (t.get("ofType") or {}).get("name")
-            print(f"  arg {a['name']}: {tname}")
-            for inp in _input_fields(client, tname):
-                it = inp["type"]
-                nm = it.get("name") or (it.get("ofType") or {}).get("name") or (
-                    ((it.get("ofType") or {}).get("ofType") or {}).get("name"))
-                print(f"    {inp['name']}: {nm}")
+            name, _, _ = _unwrap(a["type"])
+            print(f"  arg {a['name']}: {name}")
+            _print_type(client, name, 2, {name}, depth=3)
     return 0
 
 
