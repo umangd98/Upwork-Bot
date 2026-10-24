@@ -35,14 +35,12 @@ query VendorProposals($filter: VendorProposalFilter!, $sort: VendorProposalSortA
   }
 }
 """
-_ENUMS_QUERY = """
-{
-  fields: __type(name: "VendorProposalSortAttributeType") { enumValues { name } }
-  orders: __type(name: "SortOrder") { enumValues { name } }
-}
-"""
+# Confirmed with /api/debug/schema: VendorProposalSortAttributeType = CREATEDDATETIME |
+# MODIFIEDDATETIME and SortOrder = ASC | DESC. (Asking Upwork for several type
+# descriptions in one query is rejected as "bad faith introspection".)
+SORT = {"field": "CREATEDDATETIME", "sortOrder": "DESC"}
 
-_cache = {"ids": set(), "titles": {}, "sort": None}
+_cache = {"ids": set(), "titles": {}}
 
 
 # ---------------------------------------------------------------------------
@@ -76,18 +74,6 @@ def parse(result: dict) -> set[str]:
     return {p["job_id"] for p in parse_proposals(result)}
 
 
-def pick_sort(enums_result: dict) -> dict | None:
-    """Choose a sort field (prefer 'created') and order (prefer newest first) from Upwork's enums."""
-    data = (enums_result or {}).get("data") or {}
-    fields = [v["name"] for v in ((data.get("fields") or {}).get("enumValues") or [])]
-    orders = [v["name"] for v in ((data.get("orders") or {}).get("enumValues") or [])]
-    if not fields or not orders:
-        return None
-    field = next((f for f in fields if "CREAT" in f.upper()), fields[0])
-    order = next((o for o in orders if o.upper().startswith("DESC")), orders[0])
-    return {"field": field, "sortOrder": order}
-
-
 # ---------------------------------------------------------------------------
 # Upwork calls
 # ---------------------------------------------------------------------------
@@ -96,21 +82,10 @@ def _client():
     return get_client(config.UPWORK_AGENCY_ORG_ID or None)
 
 
-def _sort(client) -> dict | None:
-    if _cache["sort"] is None:
-        _cache["sort"] = pick_sort(execute_graphql(client, _ENUMS_QUERY, {}))
-        if _cache["sort"] is None:
-            logger.warning("Could not read vendorProposals sort options.")
-    return _cache["sort"]
-
-
 def _query(client, filter_obj: dict, first: int) -> list[dict] | None:
     """Run vendorProposals; None on any problem (callers treat that as 'unknown')."""
-    sort = _sort(client)
-    if not sort:
-        return None
     result = execute_graphql(client, _QUERY, {
-        "filter": filter_obj, "sort": sort, "pagination": {"first": first}})
+        "filter": filter_obj, "sort": SORT, "pagination": {"first": first}})
     if result and result.get("errors"):
         logger.warning("Proposal lookup rejected (%s); relying on the other duplicate checks.",
                        "; ".join(e.get("message", "?") for e in result["errors"])[:250])
@@ -202,17 +177,12 @@ def type_info(name: str) -> dict:
 def diagnose(job_ids: list[str]) -> dict:
     """Run the real lookup once and return everything Upwork said, errors included."""
     client = _client()
-    out = {"organization": config.UPWORK_AGENCY_ORG_ID or None}
-    enums = execute_graphql(client, _ENUMS_QUERY, {})
-    out["enums_raw"] = enums
-    out["sort"] = pick_sort(enums)
-    if not out["sort"]:
-        return out
+    out = {"organization": config.UPWORK_AGENCY_ORG_ID or None, "sort": SORT}
     filter_obj = _base_filter()
     if job_ids:
         filter_obj["jobPostingIds_any"] = [str(j) for j in job_ids]
     result = execute_graphql(client, _QUERY, {
-        "filter": filter_obj, "sort": out["sort"], "pagination": {"first": 25}})
+        "filter": filter_obj, "sort": SORT, "pagination": {"first": 25}})
     out["filter_sent"] = filter_obj
     out["errors"] = (result or {}).get("errors")
     out["total_count"] = (((result or {}).get("data") or {}).get("vendorProposals") or {}).get("totalCount")

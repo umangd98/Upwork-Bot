@@ -35,10 +35,7 @@ def main(job_ids: list[str] | None = None) -> int:
         print(f"  {a['name']}: {name}  [{kind}]")
         _print_type(client, name, 2, {name}, depth=1)
 
-    sort = applied_jobs._sort(client)
-    print("\nSort the bot will use:", sort or "COULD NOT BE DETERMINED")
-    if not sort:
-        return 1
+    print("\nSort the bot will use:", applied_jobs.SORT)
     if not applied_jobs.refresh_recent():
         print("Recent-proposals lookup FAILED (see the warning above).")
         return 1
