@@ -10,6 +10,8 @@ POST /api/skip/<job_id>[?notify=0]   mark skipped (button: Skip)
 GET  /api/application/<job_id>      current state in the same shape as an n8n event
 GET  /api/status                    proposals used in the rolling 24h window + queue counts
 GET  /api/applications[?status=]    list applications (skipped ones show the reason)
+GET  /api/debug/schema?type=X       read-only introspection of an Upwork GraphQL type
+GET  /api/debug/proposals?job_ids=  run the already-applied lookup once, show Upwork's full answer
 GET  /api/queue                     (APPLY_BACKEND=mcp) jobs the Claude session must submit
 POST /api/queue/<job_id>/claim      session claims a job right before submitting
 POST /api/result/<job_id>           session reports {ok, proposal_id | error}
@@ -22,6 +24,7 @@ from functools import wraps
 
 from flask import Blueprint, jsonify, request
 
+import applied_jobs
 import config
 import db
 import events
@@ -76,6 +79,31 @@ def applications():
     Skipped rows include the reason in `error`."""
     limit = max(1, min(int(request.args.get("limit", 50) or 50), 200))
     return jsonify({"ok": True, "items": db.list_applications(request.args.get("status"), limit)})
+
+
+@api.get("/debug/schema")
+@_requires_secret
+def debug_schema():
+    """Read-only introspection of one Upwork GraphQL type: /api/debug/schema?type=SortOrder"""
+    import re
+    name = request.args.get("type", "")
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,80}", name):
+        return jsonify({"ok": False, "message": "Pass ?type=<GraphQL type name>."}), 400
+    try:
+        return jsonify({"ok": True, "result": applied_jobs.type_info(name)})
+    except Exception as exc:
+        return jsonify({"ok": False, "message": f"Upwork request failed: {exc}"}), 502
+
+
+@api.get("/debug/proposals")
+@_requires_secret
+def debug_proposals():
+    """Run the already-applied lookup once and show Upwork's full answer: ?job_ids=1,2"""
+    ids = [i for i in request.args.get("job_ids", "").split(",") if i.strip()][:25]
+    try:
+        return jsonify({"ok": True, **applied_jobs.diagnose(ids)})
+    except Exception as exc:
+        return jsonify({"ok": False, "message": f"Upwork request failed: {exc}"}), 502
 
 
 @api.get("/queue")

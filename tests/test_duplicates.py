@@ -231,6 +231,47 @@ class TestAlreadyAppliedOnUpwork(Base):
             self.assertIn(expected, out)
 
 
+class TestDebugEndpoints(Base):
+    def test_require_the_secret(self):
+        for path in ("/api/debug/schema?type=SortOrder", "/api/debug/proposals?job_ids=1"):
+            self.assertEqual(self.client.get(path).status_code, 403, path)
+            self.assertEqual(self.client.get(path, headers={"Authorization": "Bearer x"}).status_code, 403, path)
+
+    def test_schema_returns_upworks_raw_answer_and_validates_the_name(self):
+        raw = {"data": {"__type": {"kind": "ENUM", "name": "SortOrder", "enumValues": [{"name": "ASC"}]}}}
+        with mock.patch("applied_jobs.execute_graphql", return_value=raw) as q, \
+             mock.patch("applied_jobs.get_client", return_value=object()):
+            r = self.client.get("/api/debug/schema?type=SortOrder", headers=AUTH)
+        self.assertEqual(r.get_json()["result"], raw)
+        self.assertEqual(q.call_args[0][2], {"name": "SortOrder"})        # passed as a variable
+        for bad in ("", "x y", "a{b}", "Robert');DROP", "A" * 200):
+            r = self.client.get("/api/debug/schema", headers=AUTH, query_string={"type": bad})
+            self.assertEqual(r.status_code, 400, bad)
+
+    def test_proposals_diagnostic_shows_sort_choice_errors_and_findings(self):
+        fake, calls = TestAlreadyAppliedOnUpwork._fake_upwork(self, proposals=[("5", "T")])
+        p1, p2 = TestAlreadyAppliedOnUpwork._patched(self, fake)
+        with p1, p2:
+            body = self.client.get("/api/debug/proposals?job_ids=5,6", headers=AUTH).get_json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["sort"]["field"], "CREATED_DATE_TIME")
+        self.assertEqual(body["filter_sent"]["jobPostingIds_any"], ["5", "6"])
+        self.assertEqual([p["job_id"] for p in body["found"]], ["5"])
+
+    def test_proposals_diagnostic_reports_when_sort_options_are_unreadable(self):
+        applied_jobs._cache.update(sort=None)
+        with mock.patch("applied_jobs.get_client", return_value=object()), \
+             mock.patch("applied_jobs.execute_graphql", return_value={"data": {"fields": None, "orders": None}}):
+            body = self.client.get("/api/debug/proposals", headers=AUTH).get_json()
+        self.assertIsNone(body["sort"])
+        self.assertEqual(body["enums_raw"], {"data": {"fields": None, "orders": None}})   # raw answer exposed
+
+    def test_upwork_failures_become_502_not_crashes(self):
+        with mock.patch("applied_jobs.get_client", side_effect=RuntimeError("no token")):
+            self.assertEqual(self.client.get("/api/debug/schema?type=X", headers=AUTH).status_code, 502)
+            self.assertEqual(self.client.get("/api/debug/proposals", headers=AUTH).status_code, 502)
+
+
 class TestDuplicateRejections(Base):
     def test_duplicate_error_detection(self):
         for text in ("VJ-JA-10", "You have already applied to this job", "Proposal already submitted"):

@@ -176,3 +176,45 @@ def similar_applied(title: str | None) -> dict | None:
     if created and (time.time() * 1000 - created) > TITLE_MAX_AGE_DAYS * 86400 * 1000:
         return None
     return hit
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics (read-only), exposed through /api/debug/*
+# ---------------------------------------------------------------------------
+
+_TYPE_INFO = """
+query TypeInfo($name: String!) {
+  __type(name: $name) {
+    kind name
+    enumValues { name }
+    inputFields { name type { name kind ofType { name kind ofType { name kind } } } }
+    fields { name }
+  }
+}
+"""
+
+
+def type_info(name: str) -> dict:
+    """Raw introspection of one GraphQL type (so the bot's queries can be written exactly)."""
+    return execute_graphql(_client(), _TYPE_INFO, {"name": name})
+
+
+def diagnose(job_ids: list[str]) -> dict:
+    """Run the real lookup once and return everything Upwork said, errors included."""
+    client = _client()
+    out = {"organization": config.UPWORK_AGENCY_ORG_ID or None}
+    enums = execute_graphql(client, _ENUMS_QUERY, {})
+    out["enums_raw"] = enums
+    out["sort"] = pick_sort(enums)
+    if not out["sort"]:
+        return out
+    filter_obj = _base_filter()
+    if job_ids:
+        filter_obj["jobPostingIds_any"] = [str(j) for j in job_ids]
+    result = execute_graphql(client, _QUERY, {
+        "filter": filter_obj, "sort": out["sort"], "pagination": {"first": 25}})
+    out["filter_sent"] = filter_obj
+    out["errors"] = (result or {}).get("errors")
+    out["total_count"] = (((result or {}).get("data") or {}).get("vendorProposals") or {}).get("totalCount")
+    out["found"] = parse_proposals(result)
+    return out
