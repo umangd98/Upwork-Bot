@@ -105,16 +105,26 @@ class TestAlreadyAppliedOnUpwork(Base):
             self.assertEqual(applied_jobs.parse_proposals(odd), [])
 
     def _fake_upwork(self, proposals=None, errors=None):
+        """Behaves like Upwork: status_eq is REQUIRED and matches ONE status; ids filter applies."""
         calls = []
 
         def fake(client, query, variables):
             calls.append((query, variables))
             assert query.count("__type") <= 1, "Upwork rejects several __type lookups in one query"
+            flt = variables["filter"]
+            if "status_eq" not in flt:
+                return {"errors": [{"message": "Field 'status_eq' has coerced Null value for NonNull type"}]}
             if errors:
                 return {"errors": errors}
-            edges = [{"node": {"marketplaceJobPosting": {"id": p[0], "content": {"title": p[1]}},
-                               "auditDetails": {"createdDateTime": {"rawValue": str(int(__import__("time").time() * 1000))}}}}
-                     for p in (proposals or [])]
+            wanted_ids = flt.get("jobPostingIds_any")
+            edges = []
+            for p in (proposals or []):
+                job_id, title = p[0], p[1]
+                status = p[2] if len(p) > 2 else "Accepted"
+                if status != flt["status_eq"] or (wanted_ids is not None and job_id not in wanted_ids):
+                    continue
+                edges.append({"node": {"marketplaceJobPosting": {"id": job_id, "content": {"title": title}},
+                                       "auditDetails": {"createdDateTime": {"rawValue": str(int(__import__("time").time() * 1000))}}}})
             return {"data": {"vendorProposals": {"totalCount": len(edges), "edges": edges}}}
         return fake, calls
 
@@ -124,26 +134,46 @@ class TestAlreadyAppliedOnUpwork(Base):
         return (mock.patch("applied_jobs.get_client", return_value=object()),
                 mock.patch("applied_jobs.execute_graphql", side_effect=fake))
 
-    def test_check_jobs_asks_upwork_about_exactly_these_jobs(self):
+    def test_check_jobs_asks_upwork_about_exactly_these_jobs_once_per_status(self):
         fake, calls = self._fake_upwork(proposals=[("55", "T")])
         p1, p2 = self._patched(fake)
         with p1, p2:
             self.assertTrue(applied_jobs.check_jobs(["55", "66"]))
-        q, v = calls[-1]
-        self.assertEqual(v["filter"], {"organizationId_eq": "AGENCY1", "jobPostingIds_any": ["55", "66"]})
-        self.assertEqual(v["sort"], {"field": "CREATEDDATETIME", "sortOrder": "DESC"})   # values confirmed with Upwork
-        self.assertEqual(v["pagination"], {"first": 25})
-        self.assertIn("$filter: VendorProposalFilter!", q)
+        self.assertEqual([v["filter"]["status_eq"] for q, v in calls], applied_jobs.STATUSES_ALL)
+        for q, v in calls:
+            self.assertEqual(v["filter"]["jobPostingIds_any"], ["55", "66"])
+            self.assertEqual(v["filter"]["organizationId_eq"], "AGENCY1")
+            self.assertEqual(v["sort"], {"field": "CREATEDDATETIME", "sortOrder": "DESC"})   # confirmed values
+            self.assertEqual(v["pagination"], {"first": 25})
+            self.assertIn("$filter: VendorProposalFilter!", q)
         self.assertTrue(applied_jobs.is_applied("55"))
         self.assertFalse(applied_jobs.is_applied("66"))
+
+    def test_check_jobs_stops_early_when_every_job_is_accounted_for(self):
+        fake, calls = self._fake_upwork(proposals=[("55", "T")])
+        p1, p2 = self._patched(fake)
+        with p1, p2:
+            self.assertTrue(applied_jobs.check_jobs(["55"]))
+        self.assertEqual(len(calls), 1)                       # found under "Accepted": no more queries
+
+    def test_a_proposal_in_any_status_counts_as_applied(self):
+        for status in applied_jobs.STATUSES_ALL:
+            with self.subTest(status=status):
+                applied_jobs._cache.update(ids=set(), titles={})
+                fake, _ = self._fake_upwork(proposals=[("77", "T", status)])
+                p1, p2 = self._patched(fake)
+                with p1, p2:
+                    applied_jobs.check_jobs(["77"])
+                self.assertTrue(applied_jobs.is_applied("77"), status)
 
     def test_check_jobs_chunks_large_batches(self):
         fake, calls = self._fake_upwork()
         p1, p2 = self._patched(fake)
         with p1, p2:
             self.assertTrue(applied_jobs.check_jobs([str(i) for i in range(60)]))
-        sizes = [len(v["filter"]["jobPostingIds_any"]) for q, v in calls if "vendorProposals" in q]
-        self.assertEqual(sizes, [25, 25, 10])
+        sizes = [len(v["filter"]["jobPostingIds_any"]) for q, v in calls]
+        n = len(applied_jobs.STATUSES_ALL)
+        self.assertEqual(sizes, [25] * n + [25] * n + [10] * n)
 
     def test_check_jobs_failures_are_harmless(self):
         fake, _ = self._fake_upwork(errors=[{"message": "bad argument"}])
@@ -158,10 +188,11 @@ class TestAlreadyAppliedOnUpwork(Base):
         self.assertFalse(applied_jobs.is_applied("1"))
 
     def test_recent_titles_and_similarity_window(self):
-        fake, _ = self._fake_upwork(proposals=[("9", "AI Business Process Automation Engineer")])
+        fake, calls = self._fake_upwork(proposals=[("9", "AI Business Process Automation Engineer")])
         p1, p2 = self._patched(fake)
         with p1, p2:
             self.assertTrue(applied_jobs.refresh_recent())
+        self.assertEqual([v["filter"]["status_eq"] for q, v in calls], applied_jobs.STATUSES_RECENT)
         hit = applied_jobs.similar_applied("ai business process AUTOMATION engineer!")
         self.assertEqual(hit["job_id"], "9")
         self.assertIsNone(applied_jobs.similar_applied("Something else"))
@@ -244,7 +275,10 @@ class TestDebugEndpoints(Base):
         self.assertTrue(body["ok"])
         self.assertEqual(body["sort"], {"field": "CREATEDDATETIME", "sortOrder": "DESC"})
         self.assertEqual(body["filter_sent"]["jobPostingIds_any"], ["5", "6"])
-        self.assertEqual([p["job_id"] for p in body["found"]], ["5"])
+        self.assertEqual([(p["job_id"], p["status"]) for p in body["found"]], [("5", "Accepted")])
+        self.assertEqual(set(body["by_status"]), set(applied_jobs.STATUSES_ALL))   # JSON keys come back sorted
+        self.assertEqual(body["by_status"]["Accepted"]["jobs"], ["5"])
+        self.assertTrue(all(v["errors"] is None for v in body["by_status"].values()))
 
     def test_the_lookup_never_uses_introspection(self):
         fake, calls = TestAlreadyAppliedOnUpwork._fake_upwork(self)

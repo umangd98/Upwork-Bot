@@ -40,6 +40,12 @@ query VendorProposals($filter: VendorProposalFilter!, $sort: VendorProposalSortA
 # descriptions in one query is rejected as "bad faith introspection".)
 SORT = {"field": "CREATEDDATETIME", "sortOrder": "DESC"}
 
+# filter.status_eq is REQUIRED and takes ONE value (confirmed with /api/debug/schema), so
+# the lookup asks once per status. Our own submitted proposals are "Accepted" (the MCP
+# labels that "Submitted"). Any status blocks a second proposal, so check_jobs covers all.
+STATUSES_ALL = ["Accepted", "Pending", "Offered", "Hired", "Activated", "Declined", "Withdrawn", "Archived"]
+STATUSES_RECENT = ["Accepted", "Pending", "Offered", "Hired", "Activated", "Declined"]
+
 _cache = {"ids": set(), "titles": {}}
 
 
@@ -82,10 +88,10 @@ def _client():
     return get_client(config.UPWORK_AGENCY_ORG_ID or None)
 
 
-def _query(client, filter_obj: dict, first: int) -> list[dict] | None:
-    """Run vendorProposals; None on any problem (callers treat that as 'unknown')."""
+def _query(client, filter_obj: dict, first: int, status: str) -> list[dict] | None:
+    """Run vendorProposals for one status; None on any problem (callers treat that as 'unknown')."""
     result = execute_graphql(client, _QUERY, {
-        "filter": filter_obj, "sort": SORT, "pagination": {"first": first}})
+        "filter": {**filter_obj, "status_eq": status}, "sort": SORT, "pagination": {"first": first}})
     if result and result.get("errors"):
         logger.warning("Proposal lookup rejected (%s); relying on the other duplicate checks.",
                        "; ".join(e.get("message", "?") for e in result["errors"])[:250])
@@ -106,10 +112,15 @@ def check_jobs(job_ids: list[str]) -> bool:
         client = _client()
         for i in range(0, len(ids), CHUNK):
             chunk = ids[i:i + CHUNK]
-            found = _query(client, {**_base_filter(), "jobPostingIds_any": chunk}, first=CHUNK)
-            if found is None:
-                return False
-            _cache["ids"].update(p["job_id"] for p in found)
+            seen: set[str] = set()
+            for status in STATUSES_ALL:
+                found = _query(client, {**_base_filter(), "jobPostingIds_any": chunk}, CHUNK, status)
+                if found is None:
+                    return False
+                seen.update(p["job_id"] for p in found)
+                if seen >= set(chunk):          # every job accounted for: no need to ask more
+                    break
+            _cache["ids"].update(seen)
     except Exception:
         logger.exception("Could not check existing proposals; relying on the other duplicate checks.")
         return False
@@ -119,11 +130,15 @@ def check_jobs(job_ids: list[str]) -> bool:
 def refresh_recent(limit: int = 100) -> bool:
     """Remember the titles of our latest proposals (for repost warnings)."""
     try:
-        found = _query(_client(), _base_filter(), first=limit)
+        client = _client()
+        found: list[dict] = []
+        for status in STATUSES_RECENT:
+            part = _query(client, _base_filter(), limit, status)
+            if part is None:
+                return False
+            found.extend(part)
     except Exception:
         logger.exception("Could not load recent proposals.")
-        return False
-    if found is None:
         return False
     _cache["titles"] = {}
     for p in found:
@@ -175,16 +190,24 @@ def type_info(name: str) -> dict:
 
 
 def diagnose(job_ids: list[str]) -> dict:
-    """Run the real lookup once and return everything Upwork said, errors included."""
+    """Run the real lookup once per status and return everything Upwork said, errors included."""
     client = _client()
-    out = {"organization": config.UPWORK_AGENCY_ORG_ID or None, "sort": SORT}
+    out = {"organization": config.UPWORK_AGENCY_ORG_ID or None, "sort": SORT, "by_status": {}}
     filter_obj = _base_filter()
     if job_ids:
         filter_obj["jobPostingIds_any"] = [str(j) for j in job_ids]
-    result = execute_graphql(client, _QUERY, {
-        "filter": filter_obj, "sort": SORT, "pagination": {"first": 25}})
     out["filter_sent"] = filter_obj
-    out["errors"] = (result or {}).get("errors")
-    out["total_count"] = (((result or {}).get("data") or {}).get("vendorProposals") or {}).get("totalCount")
-    out["found"] = parse_proposals(result)
+    found: dict[str, dict] = {}
+    for status in STATUSES_ALL:
+        result = execute_graphql(client, _QUERY, {
+            "filter": {**filter_obj, "status_eq": status}, "sort": SORT, "pagination": {"first": 25}})
+        errors = (result or {}).get("errors")
+        proposals = parse_proposals(result)
+        out["by_status"][status] = {
+            "errors": errors,
+            "total_count": (((result or {}).get("data") or {}).get("vendorProposals") or {}).get("totalCount"),
+            "jobs": [p["job_id"] for p in proposals]}
+        for p in proposals:
+            found[p["job_id"]] = {**p, "status": status}
+    out["found"] = list(found.values())
     return out
