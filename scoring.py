@@ -26,9 +26,8 @@ _DEFAULTS: dict[str, Any] = {
     "max_applicants": 20,
     "budget_tiers": [
         {"up_to": 1500, "weeks": 1},
-        {"up_to": 2000, "weeks": 1.5},
-        {"up_to": 3000, "weeks": 2},
-        {"up_to": 4000, "weeks": 3},
+        {"up_to": 2000, "weeks": 2},
+        {"up_to": 3000, "weeks": 3},
     ],
 }
 

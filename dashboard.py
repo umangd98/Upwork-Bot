@@ -20,6 +20,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
 import profile_metrics
+from api_routes import api as api_blueprint
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ app = Flask(__name__)
 # Trust the X-Forwarded-Proto header from App Platform's load balancer so
 # that Flask constructs https:// redirect URLs instead of http://.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+app.register_blueprint(api_blueprint)
 
 # ---------------------------------------------------------------------------
 # Optional Basic Auth

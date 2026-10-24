@@ -199,9 +199,97 @@ Each matching job is POSTed to your webhook as a JSON object:
 | Re-authenticate | `docker compose exec upwork-bot python entrypoint.py --cli --auth-only` |
 | Look up skill slugs | `docker compose exec upwork-bot python lookup_skills.py` |
 
+## Auto-apply with Slack alerts and approvals
+
+Every poll (default **every 30 minutes**) the bot searches Upwork, scores jobs, drafts a
+cover letter with the Anthropic API, and then:
+
+| Job | What happens |
+|---|---|
+| Fixed budget **under $3,000**, or any hourly job | **Auto-apply** (if `AUTO_APPLY_ENABLED=true` and fewer than 10 proposals went out in the last 24h). Slack gets a "✅ Applied automatically" message with the job description and the letter that was sent. |
+| Fixed budget **$3,000 or more** (or no budget shown) | Slack gets "🟡 Needs your approval" with the description, the letter and **Apply now / Edit letter / Skip** buttons. Nothing is sent until you press Apply. |
+| Cap reached (10 in a rolling 24h) | Slack gets "⛔ Daily cap reached" and nothing is sent; the Apply button also refuses until the window frees up. |
+| Scope doesn't fit the budget tier ($1,200 ≈ 1 week, $2,000 ≈ 2, $3,000 ≈ 2.5–3), tutoring/VA-type jobs | Silently skipped (logged only). |
+
+Thresholds, cap, hourly bid and milestone split live in the `apply:` block of `filters.yaml`.
+
+### Architecture
+```
+bot (DigitalOcean)  ──event──▶  n8n webhook ──▶ Slack message (description + letter + buttons)
+        ▲                                                │ you click Apply / Edit / Skip
+        └──────── /api/apply|skip|letter (Bearer) ◀── n8n ◀── Slack interactivity
+```
+The bot never talks to Slack directly; n8n does.
+
+### Setup
+1. **Bot env vars** (DigitalOcean → Settings): `ANTHROPIC_API_KEY`, `N8N_WEBHOOK_URL`,
+   `BOT_API_SECRET` (long random string), `UPWORK_AGENCY_ORG_ID`, `UPWORK_FREELANCER_ID`.
+   Leave `AUTO_APPLY_ENABLED=false` at first. If you previously set `POLL_INTERVAL_MINUTES`,
+   change it to `30`.
+2. **n8n**: import `n8n/upwork_slack_workflow.json`, then
+   - create a *Header Auth* credential named `Upwork Bot API` (name `Authorization`,
+     value `Bearer <BOT_API_SECRET>`) and attach it to the first webhook and every `Bot:` node;
+   - attach your existing Slack credential to the three `Slack:` nodes;
+   - in every `Bot:` node replace `https://REPLACE_BOT_URL` with your bot's public URL;
+   - in `Build Slack message` and `Build updated message` set `CHANNEL`; in `Parse Slack payload`
+     set `ALLOWED_USER` to your Slack member ID (only that user can click the buttons);
+   - rename the interactivity webhook path to something unguessable and activate the workflow.
+3. **Slack app**: enable *Interactivity* and set the Request URL to the n8n *production* URL of
+   the `Slack interactivity` webhook. The app token needs `chat:write`.
+4. **Check the Upwork API can submit proposals**: run `python check_apply_api.py` on the bot.
+   If `createJobProposal` isn't listed, auto-apply can't work through the API (see below).
+5. **Roll out safely**: with `AUTO_APPLY_ENABLED=false` every would-be auto-apply shows up in Slack
+   as "🧪 Dry run" with an Apply button. When the messages look right, set it to `true`.
+
+### Testing Slack alerts without HTTPS (buttons off)
+Slack's buttons need an HTTPS callback, so the workflow ships with `const SHOW_BUTTONS = false;`
+(top of the `Build Slack message` and `Build updated message` nodes). Alerts still arrive with the
+job description, cover letter and an "Open on Upwork" link; jobs that need approval just alert you.
+Set both constants to `true` once n8n is served over HTTPS.
+
+To test the Slack side on its own, set `N8N_WEBHOOK_URL` and `BOT_API_SECRET` in `.env` and run
+`python send_test_event.py` (sends a sample of every alert type, marked `[TEST]`).
+
+### Fallback: submit through a Claude Code session (`APPLY_BACKEND=mcp`)
+If `check_apply_api.py` shows Upwork's API won't accept proposals, set `APPLY_BACKEND=mcp`.
+The bot then never submits itself. Instead:
+
+1. Auto-apply jobs (and jobs you approve in Slack) are marked **queued** and Slack shows "⏳ Queued".
+2. A Claude Code session with the Upwork MCP runs the loop in `claude_loop/mcp_apply_loop.md`
+   (`/loop 5m Follow the instructions in claude_loop/mcp_apply_loop.md`). It reads `GET /api/queue`,
+   claims each job, creates and confirms the proposal through the MCP with the exact parameters the bot
+   computed (bid, 50/50 milestones, your edited letter), then reports `POST /api/result/<job_id>`.
+3. The bot records the result and Slack updates to "✅ Applied" or "❌ Apply failed" (screening questions
+   the job requires are listed so you can answer them on Upwork).
+
+The session refuses to confirm if the preview's bid, milestones or letter differ from the queue, if the
+job needs screening answers, or if it would cost more than 40 Connects. Queued and in-flight jobs count
+toward the 10-per-24h cap; a failed submission frees its slot. Limits: the loop only runs while that
+session is open and idle, expires after 7 days, and a click waits up to one loop interval.
+
+### Bot API (used by n8n)
+`POST /api/apply/<job_id>`, `POST /api/skip/<job_id>`, `POST /api/letter/<job_id>` (`{"letter": "..."}`),
+`GET /api/application/<job_id>`, `GET /api/status`; MCP fallback adds `GET /api/queue`,
+`POST /api/queue/<job_id>/claim`, `POST /api/result/<job_id>`. All need `Authorization: Bearer <BOT_API_SECRET>`
+and return 403 if the secret isn't configured. Button calls pass `?notify=0` so n8n updates the
+original Slack message instead of posting a second one.
+
+### Known limits
+- **Unverified Upwork call**: `applier.py` uses the `createJobProposal` mutation that the Upwork MCP
+  exposes. It is not confirmed that this app's API key may call it. A refusal is shown in Slack as
+  "❌ Apply failed" with Upwork's message and the job link; nothing is lost.
+- Jobs with **required screening questions** will likely fail to submit; the post's questions are listed
+  in the Slack message so you can answer them on Upwork.
+- The bot can't look up the client's first name from reviews (the search API doesn't return them);
+  the letter uses a name only if the post states it.
+- Slack edit boxes hold 3,000 characters; longer letters can't be edited in Slack.
+- n8n can't verify Slack's request signature in this workflow; protect it with the unguessable webhook
+  path and the `ALLOWED_USER` check.
+- Run the offline tests with `python -m unittest discover -s tests`.
+
 ## Notes
 
-- **Rate limits** — Upwork allows 40,000 API requests/day. At 10-min intervals the bot uses ~450/day.
+- **Rate limits** — Upwork allows 40,000 API requests/day. At 30-min intervals the bot uses far less than that.
 - **Token refresh** — Access tokens expire after 24 hours. The bot auto-refreshes using the refresh token and persists the new token to `data/tokens.json`.
 - **Dedup pruning** — The SQLite database auto-prunes entries older than 30 days on each poll cycle.
 - **Filters reload** — `filters.yaml` is re-read on every poll cycle, so changes take effect within 10 minutes without restarting.

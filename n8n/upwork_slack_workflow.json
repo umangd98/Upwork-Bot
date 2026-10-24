@@ -1,0 +1,590 @@
+{
+  "name": "Upwork bot: Slack alerts + approvals",
+  "nodes": [
+    {
+      "id": "a1",
+      "name": "Upwork job event",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "upwork-job-event",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Upwork Bot API"
+        }
+      },
+      "webhookId": "upwork-job-event"
+    },
+    {
+      "id": "a2",
+      "name": "Build Slack message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// ===== EDIT THIS =====\nconst CHANNEL = 'REPLACE_WITH_SLACK_CHANNEL_ID';\n// Slack buttons need an HTTPS n8n URL. Keep false until n8n is served over HTTPS.\nconst SHOW_BUTTONS = false;\n// =====================\nconst TITLES = {\n  applied: (d) => (d.mode === 'auto' ? '✅ Applied automatically' : '✅ Applied (you approved)'),\n  needs_approval: () => '🟡 Needs your approval',\n  dry_run: () => '🧪 Dry run: would have applied automatically',\n  cap_reached: () => '⛔ Daily cap reached: not applied',\n  apply_failed: () => '❌ Apply failed',\n  queued: () => '⏳ Queued: being submitted shortly',\n  skipped: () => '⏭️ Skipped',\n};\nconst ACTIONABLE = ['needs_approval', 'dry_run', 'cap_reached', 'apply_failed'];\nconst clip = (s, n) => { s = s || ''; return s.length > n ? s.slice(0, n - 1) + '…' : s; };\nconst esc = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n// Escape first, then split so no piece exceeds Slack's 3,000-char text limit,\n// and never cut in the middle of an &amp; / &lt; / &gt; entity.\nconst pieces = (raw, n, max) => {\n  const s = esc(raw || ''); const out = []; let i = 0;\n  while (i < s.length && out.length < max) {\n    let end = Math.min(i + n, s.length);\n    const amp = s.lastIndexOf('&', end - 1);\n    if (end < s.length && amp > end - 5 && s.indexOf(';', amp) >= end) end = amp;\n    out.push(s.slice(i, end)); i = end;\n  }\n  return out;\n};\n\nfunction buildMessage(d, note) {\n  const title = (TITLES[d.event] || (() => d.event))(d);\n  const c = d.client || {};\n  const blocks = [\n    { type: 'header', text: { type: 'plain_text', text: clip(title, 150), emoji: true } },\n    { type: 'section', text: { type: 'mrkdwn', text: `*<${d.url}|${esc(clip(d.title, 140))}>*` } },\n    { type: 'section', fields: [\n      { type: 'mrkdwn', text: `*Budget:* ${d.budget}` },\n      { type: 'mrkdwn', text: `*Our bid:* $${d.bid}` },\n      { type: 'mrkdwn', text: `*Fit score:* ${d.fit_score == null ? '-' : d.fit_score}` },\n      { type: 'mrkdwn', text: `*Applied (24h):* ${d.applied_in_last_24h}/${d.daily_cap}` },\n      { type: 'mrkdwn', text: `*Client:* ${c.country || '-'} · spent ${c.total_spent || '$0'} · ${c.reviews || 0} reviews` },\n      { type: 'mrkdwn', text: `*Mode:* ${d.mode === 'auto' ? 'auto-apply (under $3,000)' : 'needs approval ($3,000+)'}` },\n    ] },\n  ];\n  if (d.error) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `:warning: ${esc(clip(d.error, 800))}` } });\n  if (note) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: esc(clip(note, 500)) }] });\n  if (d.screening_questions && d.screening_questions.length) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':warning: *The post asks screening questions* (answer them on Upwork if applying fails):\\n' + d.screening_questions.slice(0, 6).map((q) => '• ' + esc(clip(q, 250))).join('\\n') } });\n  }\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Job description*' } });\n  pieces(d.description, 2800, 2).forEach((p) => blocks.push({ type: 'section', text: { type: 'mrkdwn', text: p } }));\n  if ((d.description || '').length > 5600) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Description truncated. Full text at the job link.' }] });\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Cover letter*' } });\n  pieces(d.cover_letter, 2800, 2).forEach((p) => blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '```' + p + '```' } }));\n  if (ACTIONABLE.includes(d.event) && !SHOW_BUTTONS) {\n    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `Buttons are switched off. To apply, open the job: <${d.url}|Open on Upwork>` }] });\n  }\n  if (ACTIONABLE.includes(d.event) && SHOW_BUTTONS) {\n    blocks.push({ type: 'actions', block_id: 'job_actions', elements: [\n      { type: 'button', action_id: 'apply', value: d.job_id, style: 'primary',\n        text: { type: 'plain_text', text: d.event === 'apply_failed' ? 'Retry apply' : 'Apply now' },\n        confirm: { title: { type: 'plain_text', text: 'Submit this proposal?' }, text: { type: 'mrkdwn', text: 'This sends the proposal to the client and spends Connects.' }, confirm: { type: 'plain_text', text: 'Apply' }, deny: { type: 'plain_text', text: 'Cancel' } } },\n      { type: 'button', action_id: 'edit', value: d.job_id, text: { type: 'plain_text', text: 'Edit letter' } },\n      { type: 'button', action_id: 'skip', value: d.job_id, text: { type: 'plain_text', text: 'Skip' } },\n    ] });\n  }\n  return { channel: CHANNEL, text: `${title}: ${d.title}`, blocks };\n}\n\nconst body = $input.first().json.body || $input.first().json;\nreturn [{ json: buildMessage(body, '') }];\n"
+      }
+    },
+    {
+      "id": "a3",
+      "name": "Slack: post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.postMessage",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: $json.channel, text: $json.text, blocks: $json.blocks }) }}"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "b1",
+      "name": "Slack interactivity",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        400
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "slack-interactive-REPLACE_WITH_RANDOM_STRING",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "slack-interactive"
+    },
+    {
+      "id": "b2",
+      "name": "Parse Slack payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Only YOU can click the buttons. Put your Slack member ID here (profile > ... > Copy member ID).\nconst ALLOWED_USER = 'REPLACE_WITH_YOUR_SLACK_USER_ID';\nconst first = $input.first().json;\nconst raw = (first.body && first.body.payload) || first.payload;\nconst p = typeof raw === 'string' ? JSON.parse(raw) : raw;\nif (!p || !p.user || p.user.id !== ALLOWED_USER) return [{ json: { route: 'ignore' } }];\nif (p.type === 'block_actions') {\n  const a = p.actions[0];\n  return [{ json: { route: a.action_id, job_id: a.value, channel: p.container.channel_id, ts: p.container.message_ts, trigger_id: p.trigger_id } }];\n}\nif (p.type === 'view_submission' && p.view.callback_id === 'edit_letter') {\n  const meta = JSON.parse(p.view.private_metadata);\n  const letter = p.view.state.values.letter_block.letter_input.value;\n  return [{ json: { route: 'save_letter', job_id: meta.job_id, channel: meta.channel, ts: meta.ts, letter } }];\n}\nreturn [{ json: { route: 'ignore' } }];\n"
+      }
+    },
+    {
+      "id": "b3",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        520,
+        400
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "r-apply",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "apply",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "apply"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "r-skip",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "skip"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "r-edit",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "edit",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "edit"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "id": "r-save_letter",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "save_letter",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "save_letter"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b4",
+      "name": "Bot: apply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE_BOT_URL/api/apply/{{ $json.job_id }}?notify=0",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Upwork Bot API"
+        }
+      }
+    },
+    {
+      "id": "b5",
+      "name": "Bot: skip",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        380
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE_BOT_URL/api/skip/{{ $json.job_id }}?notify=0",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Upwork Bot API"
+        }
+      }
+    },
+    {
+      "id": "b6",
+      "name": "Bot: get application (edit)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        520
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://REPLACE_BOT_URL/api/application/{{ $json.job_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Upwork Bot API"
+        }
+      }
+    },
+    {
+      "id": "b7",
+      "name": "Bot: save letter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        660
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://REPLACE_BOT_URL/api/letter/{{ $json.job_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ letter: $json.letter }) }}"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Upwork Bot API"
+        }
+      }
+    },
+    {
+      "id": "b8",
+      "name": "Build edit modal",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        520
+      ],
+      "parameters": {
+        "jsCode": "const esc = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst clip = (s, n) => { s = s || ''; return s.length > n ? s.slice(0, n - 1) + '…' : s; };\nconst d = $input.first().json;\nconst p = $('Parse Slack payload').first().json;\nconst letter = d.cover_letter || '';\nconst canEdit = letter.length <= 3000;   // Slack text inputs hold at most 3,000 characters\nconst blocks = [{ type: 'section', text: { type: 'mrkdwn', text: '*' + esc(clip(d.title, 120)) + '*' } }];\nconst view = {\n  type: 'modal', callback_id: 'edit_letter',\n  private_metadata: JSON.stringify({ job_id: p.job_id, channel: p.channel, ts: p.ts }),\n  title: { type: 'plain_text', text: 'Edit cover letter' },\n  close: { type: 'plain_text', text: 'Close' },\n  blocks,\n};\nif (canEdit) {\n  view.submit = { type: 'plain_text', text: 'Save' };\n  blocks.push({ type: 'input', block_id: 'letter_block', label: { type: 'plain_text', text: 'Cover letter' },\n    element: { type: 'plain_text_input', action_id: 'letter_input', multiline: true, initial_value: letter, max_length: 3000 } });\n} else {\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: 'This letter is longer than Slack allows in an edit box (3,000 characters). Edit it on Upwork instead.' } });\n}\nreturn [{ json: { trigger_id: p.trigger_id, view } }];\n"
+      }
+    },
+    {
+      "id": "b9",
+      "name": "Slack: open modal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        520
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/views.open",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ trigger_id: $json.trigger_id, view: $json.view }) }}"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "id": "b10",
+      "name": "Bot: get application (refresh)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1060,
+        380
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://REPLACE_BOT_URL/api/application/{{ $('Parse Slack payload').first().json.job_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Upwork Bot API"
+        }
+      }
+    },
+    {
+      "id": "b11",
+      "name": "Build updated message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        380
+      ],
+      "parameters": {
+        "jsCode": "// ===== EDIT THIS =====\nconst CHANNEL = 'REPLACE_WITH_SLACK_CHANNEL_ID';\n// Slack buttons need an HTTPS n8n URL. Keep false until n8n is served over HTTPS.\nconst SHOW_BUTTONS = false;\n// =====================\nconst TITLES = {\n  applied: (d) => (d.mode === 'auto' ? '✅ Applied automatically' : '✅ Applied (you approved)'),\n  needs_approval: () => '🟡 Needs your approval',\n  dry_run: () => '🧪 Dry run: would have applied automatically',\n  cap_reached: () => '⛔ Daily cap reached: not applied',\n  apply_failed: () => '❌ Apply failed',\n  queued: () => '⏳ Queued: being submitted shortly',\n  skipped: () => '⏭️ Skipped',\n};\nconst ACTIONABLE = ['needs_approval', 'dry_run', 'cap_reached', 'apply_failed'];\nconst clip = (s, n) => { s = s || ''; return s.length > n ? s.slice(0, n - 1) + '…' : s; };\nconst esc = (s) => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n// Escape first, then split so no piece exceeds Slack's 3,000-char text limit,\n// and never cut in the middle of an &amp; / &lt; / &gt; entity.\nconst pieces = (raw, n, max) => {\n  const s = esc(raw || ''); const out = []; let i = 0;\n  while (i < s.length && out.length < max) {\n    let end = Math.min(i + n, s.length);\n    const amp = s.lastIndexOf('&', end - 1);\n    if (end < s.length && amp > end - 5 && s.indexOf(';', amp) >= end) end = amp;\n    out.push(s.slice(i, end)); i = end;\n  }\n  return out;\n};\n\nfunction buildMessage(d, note) {\n  const title = (TITLES[d.event] || (() => d.event))(d);\n  const c = d.client || {};\n  const blocks = [\n    { type: 'header', text: { type: 'plain_text', text: clip(title, 150), emoji: true } },\n    { type: 'section', text: { type: 'mrkdwn', text: `*<${d.url}|${esc(clip(d.title, 140))}>*` } },\n    { type: 'section', fields: [\n      { type: 'mrkdwn', text: `*Budget:* ${d.budget}` },\n      { type: 'mrkdwn', text: `*Our bid:* $${d.bid}` },\n      { type: 'mrkdwn', text: `*Fit score:* ${d.fit_score == null ? '-' : d.fit_score}` },\n      { type: 'mrkdwn', text: `*Applied (24h):* ${d.applied_in_last_24h}/${d.daily_cap}` },\n      { type: 'mrkdwn', text: `*Client:* ${c.country || '-'} · spent ${c.total_spent || '$0'} · ${c.reviews || 0} reviews` },\n      { type: 'mrkdwn', text: `*Mode:* ${d.mode === 'auto' ? 'auto-apply (under $3,000)' : 'needs approval ($3,000+)'}` },\n    ] },\n  ];\n  if (d.error) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: `:warning: ${esc(clip(d.error, 800))}` } });\n  if (note) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: esc(clip(note, 500)) }] });\n  if (d.screening_questions && d.screening_questions.length) {\n    blocks.push({ type: 'section', text: { type: 'mrkdwn', text: ':warning: *The post asks screening questions* (answer them on Upwork if applying fails):\\n' + d.screening_questions.slice(0, 6).map((q) => '• ' + esc(clip(q, 250))).join('\\n') } });\n  }\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Job description*' } });\n  pieces(d.description, 2800, 2).forEach((p) => blocks.push({ type: 'section', text: { type: 'mrkdwn', text: p } }));\n  if ((d.description || '').length > 5600) blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: 'Description truncated. Full text at the job link.' }] });\n  blocks.push({ type: 'divider' });\n  blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '*Cover letter*' } });\n  pieces(d.cover_letter, 2800, 2).forEach((p) => blocks.push({ type: 'section', text: { type: 'mrkdwn', text: '```' + p + '```' } }));\n  if (ACTIONABLE.includes(d.event) && !SHOW_BUTTONS) {\n    blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `Buttons are switched off. To apply, open the job: <${d.url}|Open on Upwork>` }] });\n  }\n  if (ACTIONABLE.includes(d.event) && SHOW_BUTTONS) {\n    blocks.push({ type: 'actions', block_id: 'job_actions', elements: [\n      { type: 'button', action_id: 'apply', value: d.job_id, style: 'primary',\n        text: { type: 'plain_text', text: d.event === 'apply_failed' ? 'Retry apply' : 'Apply now' },\n        confirm: { title: { type: 'plain_text', text: 'Submit this proposal?' }, text: { type: 'mrkdwn', text: 'This sends the proposal to the client and spends Connects.' }, confirm: { type: 'plain_text', text: 'Apply' }, deny: { type: 'plain_text', text: 'Cancel' } } },\n      { type: 'button', action_id: 'edit', value: d.job_id, text: { type: 'plain_text', text: 'Edit letter' } },\n      { type: 'button', action_id: 'skip', value: d.job_id, text: { type: 'plain_text', text: 'Skip' } },\n    ] });\n  }\n  return { channel: CHANNEL, text: `${title}: ${d.title}`, blocks };\n}\n\nconst d = $input.first().json;\nconst p = $('Parse Slack payload').first().json;\nlet note = '';\nfor (const [name, key] of [['Bot: apply', 'message'], ['Bot: save letter', 'message'], ['Bot: skip', 'message']]) {\n  try { const r = $(name).first().json; if (r && r.message && (r.ok === false || name === 'Bot: save letter')) note = r.message; } catch (e) { /* branch not run */ }\n}\nconst m = buildMessage(d, note);\nreturn [{ json: { channel: p.channel, ts: p.ts, text: m.text, blocks: m.blocks } }];\n"
+      }
+    },
+    {
+      "id": "b12",
+      "name": "Slack: update message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1580,
+        380
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/chat.update",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ channel: $json.channel, ts: $json.ts, text: $json.text, blocks: $json.blocks }) }}"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Upwork job event": {
+      "main": [
+        [
+          {
+            "node": "Build Slack message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Slack message": {
+      "main": [
+        [
+          {
+            "node": "Slack: post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack interactivity": {
+      "main": [
+        [
+          {
+            "node": "Parse Slack payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Slack payload": {
+      "main": [
+        [
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Bot: apply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bot: skip",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bot: get application (edit)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bot: save letter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bot: apply": {
+      "main": [
+        [
+          {
+            "node": "Bot: get application (refresh)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bot: skip": {
+      "main": [
+        [
+          {
+            "node": "Bot: get application (refresh)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bot: save letter": {
+      "main": [
+        [
+          {
+            "node": "Bot: get application (refresh)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bot: get application (edit)": {
+      "main": [
+        [
+          {
+            "node": "Build edit modal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build edit modal": {
+      "main": [
+        [
+          {
+            "node": "Slack: open modal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bot: get application (refresh)": {
+      "main": [
+        [
+          {
+            "node": "Build updated message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build updated message": {
+      "main": [
+        [
+          {
+            "node": "Slack: update message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

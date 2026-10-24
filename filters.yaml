@@ -75,13 +75,12 @@ scoring:
   # Budget -> weeks we can deliver in. We only bid when the job's scope fits
   # the tier for its budget (higher budget = more time). Sorted ascending.
   budget_tiers:
-    - {up_to: 1500, weeks: 1}
-    - {up_to: 2000, weeks: 1.5}
-    - {up_to: 3000, weeks: 2}
-    - {up_to: 4000, weeks: 3}
+    - {up_to: 1500, weeks: 1}      # ~$1,200 per week of scope
+    - {up_to: 2000, weeks: 2}
+    - {up_to: 3000, weeks: 3}      # 2.5-3 weeks
   # Fixed budgets above the last tier are never auto-bid: they need a custom
   # scope from you and your approval first.
-  manual_review_above: 4000
+  manual_review_above: 3000   # $3,001+ = custom timeline, needs your scope/approval
   # Brand-new clients (no spend, no reviews) skip the client-history filters
   # when the job is well budgeted OR the post shows buyer credibility
   # (long description that names a website/company link).
@@ -91,6 +90,17 @@ scoring:
     min_hourly: 40
     min_description_chars: 800
   daily_apply_cap: 10
+
+# -------------------------------------------------------------------
+# AUTO-APPLY (apply.py / pipeline.py)
+# -------------------------------------------------------------------
+apply:
+  daily_cap: 10               # max proposals in any rolling 24 hours
+  max_per_cycle: 20           # max new jobs drafted per 30-min poll (limits API spend)
+  auto_below_budget: 3000     # fixed jobs under this apply automatically
+                              # (3,000 and above wait for your Slack approval)
+  hourly_bid: 40              # $/hr we bid on hourly jobs
+  milestone_split: [50, 50]   # fixed jobs: % per milestone
 
 # -------------------------------------------------------------------
 # PAGINATION

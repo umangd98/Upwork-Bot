@@ -13,6 +13,7 @@ import config
 import db
 import filters
 import notifier
+import pipeline
 import profile_metrics
 
 logger = logging.getLogger(__name__)
@@ -44,17 +45,21 @@ def poll_cycle() -> None:
 
     logger.info("%d new job(s) to notify (out of %d matches).", len(new_jobs), len(jobs))
 
-    # 3. Notify
-    delivered = notifier.notify_jobs(new_jobs)
+    # 3. Draft letters, auto-apply / queue for approval, alert Slack (via n8n)
+    app_filters = config.load_filters()
+    handled = pipeline.process_jobs(new_jobs, app_filters)
 
-    # 4. Mark as notified (only those successfully delivered)
-    notified_ids = [j["id"] for j in new_jobs[:delivered]]
-    db.mark_notified(notified_ids)
+    # 3b. Optional legacy webhook (kept for backwards compatibility)
+    delivered = notifier.notify_jobs(new_jobs) if config.WEBHOOK_URL else 0
+
+    # 4. Mark as seen only what the pipeline handled; transient failures
+    #    (e.g. the letter API was down) are retried next cycle.
+    db.mark_notified([jid for jid in handled if jid])
 
     # 5. Prune old entries
     db.prune_old_entries(days=30)
 
-    logger.info("✅ Poll cycle complete. Delivered %d notification(s).", delivered)
+    logger.info("✅ Poll cycle complete. Handled %d job(s).", len(handled))
 
 
 def metrics_cycle() -> None:
