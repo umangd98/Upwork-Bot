@@ -116,24 +116,37 @@ class TestAlreadyAppliedOnUpwork(Base):
             self.assertFalse(applied_jobs.refresh())
         self.assertFalse(applied_jobs.is_applied("55"))
 
-    def test_check_proposals_script(self):
+    def test_check_proposals_script_prints_each_arguments_shape(self):
         import io
         from contextlib import redirect_stdout
         import check_proposals_api as probe
-        ok = {"data": {"vendorProposals": {"totalCount": 71, "edges": [
-            {"node": {"marketplaceJobPosting": {"id": "1"}}}]}}}
+        ref = lambda n, k="INPUT_OBJECT": {"name": n, "kind": k, "ofType": None}
+        shapes = {"VendorProposalFilter": [("status", ref("String", "SCALAR")), ("organizationId", ref("ID", "SCALAR"))],
+                  "VendorProposalSortAttribute": [("field", ref("String", "SCALAR"))],
+                  "Pagination": [("first", ref("Int", "SCALAR")), ("after", ref("String", "SCALAR"))]}
 
         def fake(c, q, v):
-            if "__type" in q:
+            if 'name: "Query"' in q:
                 return {"data": {"__type": {"fields": [{"name": "vendorProposals", "args": [
-                    {"name": "filter", "type": {"name": "VendorProposalFilter", "ofType": None}}]}]}}}
-            return ok
+                    {"name": "filter", "type": ref("VendorProposalFilter")},
+                    {"name": "sortAttribute", "type": ref("VendorProposalSortAttribute")},
+                    {"name": "pagination", "type": ref("Pagination")}]}]}}}
+            if "__type" in q:
+                name = q.split('name: "')[1].split('"')[0]
+                return {"data": {"__type": {"kind": "INPUT_OBJECT", "enumValues": None,
+                                            "inputFields": [{"name": n, "type": t} for n, t in shapes[name]]}}}
+            return {"errors": [{"message": "Missing field argument 'filter'"}]}
         buf = io.StringIO()
+        import check_apply_api  # the shared type-printing helper has its own client import
         with mock.patch.object(probe, "get_client", return_value=object()), \
-             mock.patch.object(probe, "execute_graphql", side_effect=fake), redirect_stdout(buf):
-            self.assertEqual(probe.main(), 0)
-        self.assertIn("filter: VendorProposalFilter", buf.getvalue())
-        self.assertIn("found 1 applied job ids", buf.getvalue())
+             mock.patch.object(probe, "execute_graphql", side_effect=fake), \
+             mock.patch.object(check_apply_api, "execute_graphql", side_effect=fake), redirect_stdout(buf):
+            code = probe.main()
+        out = buf.getvalue()
+        self.assertEqual(code, 1)                      # the bot's current query is rejected
+        for expected in ("filter: VendorProposalFilter", "organizationId: ID", "sortAttribute:", "first: Int",
+                         "Bot query REJECTED"):
+            self.assertIn(expected, out)
 
 
 class TestDuplicateRejections(Base):
