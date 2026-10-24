@@ -27,7 +27,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         if os.path.exists(config.DB_FILE):
             os.remove(config.DB_FILE)
-        applied_jobs._cache.update(ids=set(), at=0.0, ok=False)
+        applied_jobs._cache.update(ids=set(), titles={}, sort=None)
         self.sent, self.drafts, self.api_calls = [], [], []
 
         def draft(j, f):
@@ -93,37 +93,116 @@ class TestAlreadyAppliedOnUpwork(Base):
 
     def test_parse_handles_real_and_odd_shapes(self):
         good = {"data": {"vendorProposals": {"edges": [
-            {"node": {"marketplaceJobPosting": {"id": 111}}},
+            {"node": {"marketplaceJobPosting": {"id": 111, "content": {"title": "A"}},
+                      "auditDetails": {"createdDateTime": {"rawValue": "1792390854363"}}}},
             {"node": {"marketplaceJobPosting": {"id": "222"}}},
             {"node": {"marketplaceJobPosting": None}}, {"node": None}]}}}
+        got = applied_jobs.parse_proposals(good)
+        self.assertEqual([(p["job_id"], p["title"], p["created_ms"]) for p in got],
+                         [("111", "A", 1792390854363), ("222", "", None)])
         self.assertEqual(applied_jobs.parse(good), {"111", "222"})
         for odd in (None, {}, {"data": None}, {"data": {"vendorProposals": None}}):
-            self.assertEqual(applied_jobs.parse(odd), set())
+            self.assertEqual(applied_jobs.parse_proposals(odd), [])
 
-    def test_refresh_success_caches_and_failures_are_harmless(self):
-        ok = {"data": {"vendorProposals": {"edges": [{"node": {"marketplaceJobPosting": {"id": "55"}}}]}}}
-        with mock.patch("applied_jobs.get_client", return_value=object()), \
-             mock.patch("applied_jobs.execute_graphql", return_value=ok) as q:
-            self.assertTrue(applied_jobs.refresh())
-            self.assertTrue(applied_jobs.is_applied("55"))
-            applied_jobs.refresh()                              # fresh cache: no second query
-            self.assertEqual(q.call_count, 1)
-        applied_jobs._cache.update(ids=set(), at=0.0, ok=False)
-        with mock.patch("applied_jobs.get_client", return_value=object()), \
-             mock.patch("applied_jobs.execute_graphql", return_value={"errors": [{"message": "no such field"}]}):
-            self.assertFalse(applied_jobs.refresh())
+    def test_pick_sort_prefers_created_and_newest_first(self):
+        enums = {"data": {"fields": {"enumValues": [{"name": "TITLE"}, {"name": "CREATED_DATE_TIME"}]},
+                          "orders": {"enumValues": [{"name": "ASC"}, {"name": "DESC"}]}}}
+        self.assertEqual(applied_jobs.pick_sort(enums), {"field": "CREATED_DATE_TIME", "sortOrder": "DESC"})
+        only = {"data": {"fields": {"enumValues": [{"name": "X"}]}, "orders": {"enumValues": [{"name": "UP"}]}}}
+        self.assertEqual(applied_jobs.pick_sort(only), {"field": "X", "sortOrder": "UP"})
+        self.assertIsNone(applied_jobs.pick_sort({"data": {"fields": None, "orders": None}}))
+        self.assertIsNone(applied_jobs.pick_sort(None))
+
+    def _fake_upwork(self, proposals=None, errors=None):
+        enums = {"data": {"fields": {"enumValues": [{"name": "CREATED_DATE_TIME"}]},
+                          "orders": {"enumValues": [{"name": "DESC"}]}}}
+        calls = []
+
+        def fake(client, query, variables):
+            calls.append((query, variables))
+            if "__type" in query:
+                return enums
+            if errors:
+                return {"errors": errors}
+            edges = [{"node": {"marketplaceJobPosting": {"id": p[0], "content": {"title": p[1]}},
+                               "auditDetails": {"createdDateTime": {"rawValue": str(int(__import__("time").time() * 1000))}}}}
+                     for p in (proposals or [])]
+            return {"data": {"vendorProposals": {"totalCount": len(edges), "edges": edges}}}
+        return fake, calls
+
+    def _patched(self, fake):
+        applied_jobs._cache.update(ids=set(), titles={}, sort=None)
+        config.UPWORK_AGENCY_ORG_ID = "AGENCY1"
+        return (mock.patch("applied_jobs.get_client", return_value=object()),
+                mock.patch("applied_jobs.execute_graphql", side_effect=fake))
+
+    def test_check_jobs_asks_upwork_about_exactly_these_jobs(self):
+        fake, calls = self._fake_upwork(proposals=[("55", "T")])
+        p1, p2 = self._patched(fake)
+        with p1, p2:
+            self.assertTrue(applied_jobs.check_jobs(["55", "66"]))
+        q, v = calls[-1]
+        self.assertEqual(v["filter"], {"organizationId_eq": "AGENCY1", "jobPostingIds_any": ["55", "66"]})
+        self.assertEqual(v["sort"], {"field": "CREATED_DATE_TIME", "sortOrder": "DESC"})
+        self.assertEqual(v["pagination"], {"first": 25})
+        self.assertIn("$filter: VendorProposalFilter!", q)
+        self.assertTrue(applied_jobs.is_applied("55"))
+        self.assertFalse(applied_jobs.is_applied("66"))
+
+    def test_check_jobs_chunks_large_batches(self):
+        fake, calls = self._fake_upwork()
+        p1, p2 = self._patched(fake)
+        with p1, p2:
+            self.assertTrue(applied_jobs.check_jobs([str(i) for i in range(60)]))
+        sizes = [len(v["filter"]["jobPostingIds_any"]) for q, v in calls if "vendorProposals" in q]
+        self.assertEqual(sizes, [25, 25, 10])
+
+    def test_check_jobs_failures_are_harmless(self):
+        fake, _ = self._fake_upwork(errors=[{"message": "bad argument"}])
+        p1, p2 = self._patched(fake)
+        with p1, p2:
+            self.assertFalse(applied_jobs.check_jobs(["1"]))
+        applied_jobs._cache.update(ids=set(), titles={}, sort=None)
         with mock.patch("applied_jobs.get_client", side_effect=RuntimeError("no token")):
-            self.assertFalse(applied_jobs.refresh())
-        self.assertFalse(applied_jobs.is_applied("55"))
+            self.assertFalse(applied_jobs.check_jobs(["1"]))
+            self.assertFalse(applied_jobs.refresh_recent())
+        self.assertTrue(applied_jobs.check_jobs([]))            # nothing to ask is fine
+        self.assertFalse(applied_jobs.is_applied("1"))
 
-    def test_check_proposals_script_prints_each_arguments_shape(self):
+    def test_recent_titles_and_similarity_window(self):
+        fake, _ = self._fake_upwork(proposals=[("9", "AI Business Process Automation Engineer")])
+        p1, p2 = self._patched(fake)
+        with p1, p2:
+            self.assertTrue(applied_jobs.refresh_recent())
+        hit = applied_jobs.similar_applied("ai business process AUTOMATION engineer!")
+        self.assertEqual(hit["job_id"], "9")
+        self.assertIsNone(applied_jobs.similar_applied("Something else"))
+        old = applied_jobs._cache["titles"]["ai business process automation engineer"]
+        old["created_ms"] = 1_000_000_000_000                    # year 2001: outside the window
+        self.assertIsNone(applied_jobs.similar_applied("AI Business Process Automation Engineer"))
+
+    def test_title_match_forces_approval_and_warns(self):
+        applied_jobs._cache.update(titles={"n8n automation x1": {"job_id": "OLD", "title": "n8n automation x1",
+                                                                 "created_ms": None}})
+        pipeline.process_jobs([job("x1", amount=1000)], FILTERS)    # cheap job would normally auto-apply
+        row = db.get_application("x1")
+        self.assertEqual((row["mode"], row["status"]), ("approval", "pending"))
+        self.assertIn("Possible repost", row["error"])
+        self.assertIn("OLD", row["error"])
+        self.assertEqual(self.sent[-1]["event"], "needs_approval")
+        self.assertIn("Possible repost", self.sent[-1]["error"])    # shown in Slack
+        self.assertEqual(self.api_calls if hasattr(self, "api_calls") else [], [])
+
+    def test_check_proposals_script(self):
         import io
         from contextlib import redirect_stdout
+        import check_apply_api
         import check_proposals_api as probe
         ref = lambda n, k="INPUT_OBJECT": {"name": n, "kind": k, "ofType": None}
-        shapes = {"VendorProposalFilter": [("status", ref("String", "SCALAR")), ("organizationId", ref("ID", "SCALAR"))],
+        shapes = {"VendorProposalFilter": [("jobPostingIds_any", ref("ID", "SCALAR"))],
                   "VendorProposalSortAttribute": [("field", ref("String", "SCALAR"))],
-                  "Pagination": [("first", ref("Int", "SCALAR")), ("after", ref("String", "SCALAR"))]}
+                  "Pagination": [("first", ref("Int", "SCALAR"))]}
+        fake_up, _ = self._fake_upwork(proposals=[("77", "Some job")])
 
         def fake(c, q, v):
             if 'name: "Query"' in q:
@@ -131,21 +210,24 @@ class TestAlreadyAppliedOnUpwork(Base):
                     {"name": "filter", "type": ref("VendorProposalFilter")},
                     {"name": "sortAttribute", "type": ref("VendorProposalSortAttribute")},
                     {"name": "pagination", "type": ref("Pagination")}]}]}}}
-            if "__type" in q:
+            if "inputFields" in q:
                 name = q.split('name: "')[1].split('"')[0]
                 return {"data": {"__type": {"kind": "INPUT_OBJECT", "enumValues": None,
                                             "inputFields": [{"name": n, "type": t} for n, t in shapes[name]]}}}
-            return {"errors": [{"message": "Missing field argument 'filter'"}]}
+            return fake_up(c, q, v)
+        applied_jobs._cache.update(ids=set(), titles={}, sort=None)
+        config.UPWORK_AGENCY_ORG_ID = "AGENCY1"
         buf = io.StringIO()
-        import check_apply_api  # the shared type-printing helper has its own client import
         with mock.patch.object(probe, "get_client", return_value=object()), \
              mock.patch.object(probe, "execute_graphql", side_effect=fake), \
-             mock.patch.object(check_apply_api, "execute_graphql", side_effect=fake), redirect_stdout(buf):
-            code = probe.main()
+             mock.patch.object(check_apply_api, "execute_graphql", side_effect=fake), \
+             mock.patch("applied_jobs.get_client", return_value=object()), \
+             mock.patch("applied_jobs.execute_graphql", side_effect=fake), redirect_stdout(buf):
+            code = probe.main(["77"])
         out = buf.getvalue()
-        self.assertEqual(code, 1)                      # the bot's current query is rejected
-        for expected in ("filter: VendorProposalFilter", "organizationId: ID", "sortAttribute:", "first: Int",
-                         "Bot query REJECTED"):
+        self.assertEqual(code, 0, out)
+        for expected in ("jobPostingIds_any: ID", "Sort the bot will use", "CREATED_DATE_TIME",
+                         "Recent-proposals lookup OK", "recognised as already applied: True"):
             self.assertIn(expected, out)
 
 

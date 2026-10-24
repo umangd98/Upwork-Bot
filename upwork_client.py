@@ -64,9 +64,14 @@ def build_config(token: dict | None = None) -> upwork.Config:
     return upwork.Config(cfg)
 
 
-def get_client() -> upwork.Client:
+def get_client(org_uid: str | None = None) -> upwork.Client:
     """
     Return an authenticated upwork.Client, ready to make API calls.
+
+    Pass `org_uid` (e.g. the agency's) to act inside that organization: the SDK then
+    sends X-Upwork-API-TenantId, which decides whose Connects are spent and which
+    account's proposals are listed. Without it Upwork uses the token owner's personal
+    organization.
 
     Loads the saved token, builds the SDK client with auto-refresh,
     and patches the token_updater so refreshed tokens are persisted.
@@ -80,6 +85,8 @@ def get_client() -> upwork.Client:
 
     cfg = build_config(token)
     client = upwork.Client(cfg)
+    if org_uid:
+        client.set_org_uid_header(org_uid)
 
     # Patch: also persist to disk whenever the SDK refreshes the token
     original_updater = client.refresh_config_from_access_token

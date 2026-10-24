@@ -119,6 +119,33 @@ class TestApply(unittest.TestCase):
             self.run_apply(ConnectionError("down"))
 
 
+class TestOrganizationContext(unittest.TestCase):
+    def test_get_client_sets_the_tenant_header_only_when_asked(self):
+        import upwork
+        import upwork_client
+
+        class FakeClient:
+            def __init__(self, cfg):
+                self.tenant = None
+            def set_org_uid_header(self, tenant_id):
+                self.tenant = tenant_id
+            def refresh_config_from_access_token(self, token):
+                pass
+
+        with mock.patch.object(upwork, "Client", FakeClient), \
+             mock.patch.object(upwork_client, "_load_token", return_value={"access_token": "a", "refresh_token": "r"}), \
+             mock.patch.object(upwork_client, "build_config", return_value=object()):
+            self.assertIsNone(upwork_client.get_client().tenant)                 # search/profile: unchanged
+            self.assertEqual(upwork_client.get_client("AGENCY1").tenant, "AGENCY1")
+
+    def test_apply_acts_inside_the_agency_organization(self):
+        config.UPWORK_AGENCY_ORG_ID, config.UPWORK_FREELANCER_ID = "AGENCY1", "FREE1"
+        with mock.patch("applier.get_client", return_value=object()) as gc, \
+             mock.patch("applier.execute_graphql", return_value=OK):
+            applier.apply(stored_app(), job("123", amount=1500), FILTERS)
+        gc.assert_called_once_with("AGENCY1")
+
+
 class TestHourlyZeroAmountRegression(unittest.TestCase):
     """Hourly jobs carry amount.rawValue == "0": never a $0 fixed budget, bid or milestone."""
 

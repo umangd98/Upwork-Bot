@@ -117,7 +117,7 @@ def apply(app: dict, job: dict, filters: dict) -> str:
     if missing:
         raise ApplyError("Not sent: these settings are empty on the bot: " + ", ".join(missing))
     payload = build_input(app, job, filters)
-    client = get_client()
+    client = get_client(config.UPWORK_AGENCY_ORG_ID)   # spend the agency's Connects
     try:
         # Variables (not an inlined literal) so line breaks and quotes in the
         # cover letter can't break the GraphQL document.

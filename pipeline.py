@@ -262,6 +262,8 @@ def process_job(job: dict, filters: dict) -> bool:
         _mark_skipped(job, choose_mode(job, cfg), choose_bid(job, cfg), f"Repost of job {original}.")
         return True
 
+    similar = applied_jobs.similar_applied(job.get("title"))
+
     try:
         draft = cover_letter.draft(job, filters)
     except Exception:
@@ -269,6 +271,8 @@ def process_job(job: dict, filters: dict) -> bool:
         return False
 
     mode = choose_mode(job, cfg)
+    if similar:
+        mode = "approval"   # a title match may be a repost of something we applied to: ask first
     bid = choose_bid(job, cfg)
 
     if not draft["apply"]:
@@ -279,6 +283,10 @@ def process_job(job: dict, filters: dict) -> bool:
         return True
 
     db.add_application(job_id, mode, job.get("title", ""), job, draft["cover_letter"], bid)
+    if similar:
+        db.update_application(job_id, error=(
+            f"Possible repost: you already applied to a job titled '{similar['title']}' "
+            f"(id {similar['job_id']}). Check before applying."))
     app = db.get_application(job_id)
     cap = int(cfg.get("daily_cap", 10))
     extra = {"screening_questions": draft.get("screening_questions_in_post") or []}

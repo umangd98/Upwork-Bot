@@ -274,10 +274,17 @@ session is open and idle, expires after 7 days, and a click waits up to one loop
 and return 403 if the secret isn't configured. Button calls pass `?notify=0` so n8n updates the
 original Slack message instead of posting a second one.
 
-### Duplicate protection
+### Duplicate protection and the organization context
+Proposals are submitted **inside the agency's organization** (the SDK sends `X-Upwork-API-TenantId`
+= `UPWORK_AGENCY_ORG_ID`), so the agency's Connects are spent, not the personal account's. Search and
+profile stats are unchanged.
+
 The bot won't apply to the same work twice, in four layers:
-1. **Upwork's proposal list**: each poll loads the jobs this account already applied to (best effort;
-   run `python check_proposals_api.py` to confirm it works for your API key).
+1. **Ask Upwork**: each poll asks `vendorProposals` which of the new job ids already have a proposal from
+   the agency (catches jobs applied to by hand or through the MCP), and loads the titles of the latest
+   proposals. A new job whose title matches a recent proposal is sent to **approval with a warning**
+   ("Possible repost"), since a title alone can't prove it is the same client. Both lookups are best effort;
+   run `python check_proposals_api.py [job_id]` to verify them.
 2. **Repost detection**: the same title from the same client (country, lifetime spend, review count)
    within 14 days of a job already handled is skipped, even under a new job id.
 3. **Upwork's own refusal** (`VJ-JA-10` / "already applied") is recorded as *skipped, already applied*,

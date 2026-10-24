@@ -46,7 +46,10 @@ def poll_cycle() -> None:
 
     logger.info("%d new job(s) to notify (out of %d matches).", len(new_jobs), len(jobs))
 
-    applied_jobs.refresh()  # best effort; failures only log a warning
+    # Best effort; failures only log a warning. Ask Upwork about exactly these jobs,
+    # and load our latest proposal titles to flag reposts.
+    applied_jobs.check_jobs([j["id"] for j in new_jobs if j.get("id")])
+    applied_jobs.refresh_recent()
 
     # 3. Draft letters, auto-apply / queue for approval, alert Slack (via n8n)
     app_filters = config.load_filters()

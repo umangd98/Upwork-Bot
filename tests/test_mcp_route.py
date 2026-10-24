@@ -275,8 +275,11 @@ class TestPollCycle(McpBase):
              mock.patch("cover_letter.draft", side_effect=flaky_draft), \
              mock.patch("config.load_filters", return_value={**FILTERS}), \
              mock.patch("notifier.notify_jobs", return_value=0), \
-             mock.patch("applied_jobs.refresh", return_value=True):
+             mock.patch("applied_jobs.check_jobs", return_value=True) as check, \
+             mock.patch("applied_jobs.refresh_recent", return_value=True) as recent:
             scheduler.poll_cycle()
+            self.assertEqual(check.call_args[0][0], ["c1", "c2", "c3"])   # asks Upwork about these jobs
+            self.assertEqual(recent.call_count, 1)
             self.assertEqual(sorted(i["job_id"] for i in self.queue()), ["c1"])    # c3 failed to draft
             self.assertEqual(self.events(), ["queued", "needs_approval"])
             self.assertEqual(db.filter_unseen(["c1", "c2", "c3"]), {"c3"})        # only c3 retried
