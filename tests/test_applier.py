@@ -104,6 +104,61 @@ class TestApply(unittest.TestCase):
             self.run_apply(ConnectionError("down"))
 
 
+class TestHourlyZeroAmountRegression(unittest.TestCase):
+    """Hourly jobs carry amount.rawValue == "0": never a $0 fixed budget, bid or milestone."""
+
+    def setUp(self):
+        if os.path.exists(config.DB_FILE):
+            os.remove(config.DB_FILE)
+        self.sent = []
+        for p in (mock.patch("events.post", side_effect=lambda x: self.sent.append(x) or True),
+                  mock.patch("api_routes._filters", return_value=FILTERS)):
+            p.start()
+            self.addCleanup(p.stop)
+        config.AUTO_APPLY_ENABLED = False
+
+    def test_helpers_ignore_zero_amount(self):
+        import scoring
+        hourly = job("h", hourly=(30, 60))
+        self.assertEqual(hourly["amount"]["rawValue"], "0")
+        self.assertIsNone(scoring.fixed_budget(hourly))
+        self.assertEqual(scoring.fixed_budget(job("f", amount=1500)), 1500.0)
+        self.assertEqual(pipeline.choose_bid(hourly, FILTERS["apply"]), 40)
+        self.assertEqual(pipeline.choose_mode(hourly, FILTERS["apply"]), "auto")
+
+    def test_scope_gate_does_not_apply_to_hourly(self):
+        import cover_letter
+        reply = mock.Mock()
+        reply.raise_for_status.return_value = None
+        reply.json.return_value = {"content": [{"type": "text", "text":
+            '{"apply": true, "estimated_weeks": 4, "cover_letter": "Hi", "screening_questions_in_post": []}'}]}
+        config.ANTHROPIC_API_KEY = "k"
+        with mock.patch("cover_letter.requests.post", return_value=reply):
+            r = cover_letter.draft(job("h", hourly=(30, 60)), {"scoring": {}})
+        self.assertTrue(r["apply"], r.get("skip_reason"))      # was: "scope needs ~4 weeks but $0 buys 1"
+
+    def test_hourly_payloads_have_no_milestones_and_a_real_rate(self):
+        h = job("h", hourly=(30, 60))
+        a = {"job_id": "h", "letter": "L", "bid": pipeline.choose_bid(h, FILTERS["apply"])}
+        self.assertNotIn("milestones", applier.build_input(a, h, FILTERS))
+        self.assertNotIn("estimatedDuration", applier.build_input(a, h, FILTERS))
+        mcp = applier.build_mcp_params(a, h, FILTERS)
+        self.assertEqual(mcp["charged_amount"], 40.0)
+        self.assertNotIn("milestones", mcp)
+
+    def test_slack_budget_text_for_hourly_and_fixed(self):
+        import events
+        self.assertEqual(events._budget(job("h", hourly=(30, 60))), "$30–$60/hr")
+        self.assertEqual(events._budget(job("f", amount=1500)), "$1,500 fixed")
+
+    def test_full_pipeline_for_an_hourly_job(self):
+        with mock.patch("cover_letter.draft", return_value=dict(test_flow.GOOD)):
+            pipeline.process_jobs([job("h", hourly=(30, 60))], FILTERS)
+        row = db.get_application("h")
+        self.assertEqual((row["mode"], row["bid"], row["status"]), ("auto", 40.0, "pending"))
+        self.assertEqual(self.sent[-1]["budget"], "$30–$60/hr")
+
+
 class TestApplicationsEndpoint(unittest.TestCase):
     def setUp(self):
         if os.path.exists(config.DB_FILE):

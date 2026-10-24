@@ -41,6 +41,8 @@ def job(jid, amount=None, hourly=None, title="n8n automation"):
     if amount is not None:
         j["amount"] = {"rawValue": str(amount), "displayValue": f"{amount:,.0f}"}
     if hourly is not None:
+        # Real hourly jobs report a fixed "amount" of 0; it is not a $0 budget.
+        j["amount"] = {"rawValue": "0", "displayValue": "0"}
         j["hourlyBudgetMin"] = {"rawValue": str(hourly[0])}
         j["hourlyBudgetMax"] = {"rawValue": str(hourly[1])}
     return j

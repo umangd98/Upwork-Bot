@@ -11,6 +11,7 @@ lost.
 import logging
 
 import config
+import scoring
 from upwork_client import execute_graphql, get_client
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,7 @@ def build_mcp_params(app: dict, job: dict, filters: dict) -> dict:
         "charged_amount": float(app["bid"]),
         "cover_letter": app["letter"],
     }
-    if (job.get("amount") or {}).get("rawValue") not in (None, ""):
+    if scoring.fixed_budget(job) is not None:
         params["payment_mode"] = "by_milestone"
         params["estimated_duration"] = "less_than_1_month"
         params["milestones"] = milestones_for(float(app["bid"]), cfg.get("milestone_split") or [50, 50])
@@ -75,8 +76,7 @@ def build_input(app: dict, job: dict, filters: dict) -> dict:
     if contractor:
         payload["selectedContractor"] = contractor
 
-    is_fixed = (job.get("amount") or {}).get("rawValue") not in (None, "")
-    if is_fixed:
+    if scoring.fixed_budget(job) is not None:
         payload["milestones"] = milestones_for(
             float(app["bid"]), cfg.get("milestone_split") or [50, 50])
         payload["estimatedDuration"] = _DURATION_IDS["less_than_1_month"]

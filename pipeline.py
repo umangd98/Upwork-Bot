@@ -21,6 +21,7 @@ import config
 import cover_letter
 import db
 import events
+import scoring
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _amount(obj) -> float | None:
 
 def choose_mode(job: dict, cfg: dict) -> str:
     """'auto' for fixed jobs under the threshold and hourly jobs, else 'approval'."""
-    fixed = _amount(job.get("amount"))
+    fixed = scoring.fixed_budget(job)
     if fixed is not None:
         return "auto" if fixed < float(cfg.get("auto_below_budget", 3000)) else "approval"
     if _amount(job.get("hourlyBudgetMin")) is not None or _amount(job.get("hourlyBudgetMax")) is not None:
@@ -47,7 +48,7 @@ def choose_mode(job: dict, cfg: dict) -> str:
 
 
 def choose_bid(job: dict, cfg: dict) -> float:
-    fixed = _amount(job.get("amount"))
+    fixed = scoring.fixed_budget(job)
     if fixed is not None:
         return fixed
     bid = float(cfg.get("hourly_bid", 40))

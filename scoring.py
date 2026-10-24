@@ -32,6 +32,16 @@ _DEFAULTS: dict[str, Any] = {
 }
 
 
+def fixed_budget(job: dict) -> float | None:
+    """The fixed-price budget, or None. Hourly jobs report an amount of 0, which is
+    NOT a $0 fixed budget, so only positive amounts count."""
+    try:
+        value = float((job.get("amount") or {}).get("rawValue"))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def weeks_for_budget(budget: float, cfg: dict | None = None) -> float | None:
     """Weeks of delivery time our rules allow for a fixed budget (None = above all tiers: needs manual scope + approval, never auto-bid)."""
     tiers = {**_DEFAULTS, **(cfg or {})}["budget_tiers"]
@@ -49,7 +59,7 @@ def is_credible_new_client(job: dict, cfg: dict | None = None) -> bool:
     bet = ((cfg or {}).get("new_client_bet")) or {}
     if not bet.get("enabled"):
         return False
-    fixed = _amount(job.get("amount"))
+    fixed = fixed_budget(job)
     hmin, hmax = _amount(job.get("hourlyBudgetMin")), _amount(job.get("hourlyBudgetMax"))
     hourly_top = hmax if hmax is not None else hmin
     if fixed is not None and fixed >= bet.get("min_fixed_budget", 1000):
@@ -102,7 +112,7 @@ def score_job(job: dict, cfg: dict | None = None) -> tuple[int, list[str]]:
         why.append(f"avoid-term in title -40 ({', '.join(avoided)})")
 
     # Budget (max 20)
-    fixed = _amount(job.get("amount"))
+    fixed = fixed_budget(job)
     hmin, hmax = _amount(job.get("hourlyBudgetMin")), _amount(job.get("hourlyBudgetMax"))
     if hmin is not None or hmax is not None:
         top = hmax if hmax is not None else hmin

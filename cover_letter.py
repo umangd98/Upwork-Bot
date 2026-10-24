@@ -124,7 +124,4 @@ def draft(job: dict, filters: dict) -> dict:
 
 
 def _fixed_budget(job: dict) -> float | None:
-    try:
-        return float((job.get("amount") or {}).get("rawValue"))
-    except (TypeError, ValueError):
-        return None
+    return scoring.fixed_budget(job)

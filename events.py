@@ -16,6 +16,7 @@ import time
 import requests
 
 import config
+import scoring
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,9 @@ MAX_RETRIES = 3
 
 
 def _budget(job: dict) -> str:
-    fixed = (job.get("amount") or {}).get("displayValue")
-    if fixed:
-        return f"${fixed} fixed"
+    fixed = scoring.fixed_budget(job)
+    if fixed is not None:
+        return f"${fixed:,.0f} fixed"
     lo = (job.get("hourlyBudgetMin") or {}).get("rawValue")
     hi = (job.get("hourlyBudgetMax") or {}).get("rawValue")
     if lo or hi:
