@@ -15,7 +15,9 @@ button and auto-apply share the same cap check and double-submit protection.
 
 import json
 import logging
+import re
 
+import applied_jobs
 import applier
 import config
 import cover_letter
@@ -54,6 +56,41 @@ def choose_bid(job: dict, cfg: dict) -> float:
     bid = float(cfg.get("hourly_bid", 40))
     top = _amount(job.get("hourlyBudgetMax"))
     return min(bid, top) if top else bid
+
+
+# ---------------------------------------------------------------------------
+# Duplicate guards
+# ---------------------------------------------------------------------------
+
+def repost_key(job: dict) -> tuple:
+    """Same title + client country + client lifetime spend + review count = same client
+    reposting the same job under a new id (Upwork's own duplicate check won't catch it)."""
+    client = job.get("client") or {}
+    title = re.sub(r"[^a-z0-9]+", " ", (job.get("title") or "").lower()).strip()
+    spent = (client.get("totalSpent") or {}).get("rawValue")
+    return (title, (client.get("location") or {}).get("country"), str(spent), client.get("totalReviews"))
+
+
+def find_repost(job: dict) -> str | None:
+    """Job id of a recent, non-skipped application that looks like the same posting."""
+    key = repost_key(job)
+    if not key[0]:
+        return None
+    for row in db.recent_applications(14):
+        if row["job_id"] == job.get("id"):
+            continue
+        try:
+            other = json.loads(row["job_json"] or "{}")
+        except ValueError:
+            continue
+        if repost_key(other) == key:
+            return row["job_id"]
+    return None
+
+
+def _mark_skipped(job: dict, mode: str, bid: float, reason: str) -> None:
+    db.add_application(job["id"], mode, job.get("title", ""), job, "", bid, status="skipped")
+    db.update_application(job["id"], error=reason)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +173,12 @@ def apply_application(job_id: str, filters: dict, notify: bool = True) -> dict:
     job = json.loads(app["job_json"])
     try:
         proposal_id = applier.apply(app, job, filters)
+    except applier.AlreadyApplied as exc:
+        logger.info("Already applied to %s: %s", job_id, exc)
+        db.update_application(job_id, status="skipped", error=f"Already applied on Upwork ({exc})")
+        if notify:
+            _emit("skipped", db.get_application(job_id), filters)
+        return {"ok": False, "status": "skipped", "message": "Already applied on Upwork; nothing was sent."}
     except applier.ApplyError as exc:
         logger.error("Apply failed for %s: %s", job_id, exc)
         db.update_application(job_id, status="failed", error=str(exc))
@@ -182,6 +225,10 @@ def record_result(job_id: str, ok: bool, filters: dict, proposal_id: str | None 
                               applied_at=db._now(), error=None)
         _emit("applied", db.get_application(job_id), filters)
         return {"ok": True, "message": "Recorded as applied."}
+    if applier.is_duplicate_error(error or ""):
+        db.update_application(job_id, status="skipped", error=f"Already applied on Upwork ({(error or '')[:200]})")
+        _emit("skipped", db.get_application(job_id), filters)
+        return {"ok": True, "message": "Recorded as already applied."}
     db.update_application(job_id, status="failed", error=(error or "Submission failed.")[:1000])
     extra = {"screening_questions": questions} if questions else {}
     _emit("apply_failed", db.get_application(job_id), filters, **extra)
@@ -204,6 +251,17 @@ def process_job(job: dict, filters: dict) -> bool:
         return True
 
     cfg = filters.get("apply") or {}
+
+    if applied_jobs.is_applied(job_id):
+        logger.info("Skipping '%s': already applied on Upwork.", job.get("title"))
+        _mark_skipped(job, choose_mode(job, cfg), choose_bid(job, cfg), "Already applied on Upwork.")
+        return True
+    original = find_repost(job)
+    if original:
+        logger.info("Skipping '%s': repost of %s.", job.get("title"), original)
+        _mark_skipped(job, choose_mode(job, cfg), choose_bid(job, cfg), f"Repost of job {original}.")
+        return True
+
     try:
         draft = cover_letter.draft(job, filters)
     except Exception:

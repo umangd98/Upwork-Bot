@@ -9,6 +9,7 @@ import logging
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 from apscheduler.schedulers.background import BackgroundScheduler
 
+import applied_jobs
 import config
 import db
 import filters
@@ -44,6 +45,8 @@ def poll_cycle() -> None:
         return
 
     logger.info("%d new job(s) to notify (out of %d matches).", len(new_jobs), len(jobs))
+
+    applied_jobs.refresh()  # best effort; failures only log a warning
 
     # 3. Draft letters, auto-apply / queue for approval, alert Slack (via n8n)
     app_filters = config.load_filters()

@@ -25,6 +25,16 @@ class ApplyError(Exception):
     """Raised when Upwork refuses or fails the submission."""
 
 
+def is_duplicate_error(text: str) -> bool:
+    """Upwork refuses a second proposal with VJ-JA-10 ("already applied" / invitation exists)."""
+    t = (text or "").lower()
+    return "vj-ja-10" in t or "already applied" in t or "already submitted" in t
+
+
+class AlreadyApplied(ApplyError):
+    """Upwork says a proposal (or invitation) already exists for this job."""
+
+
 def milestones_for(total: float, split: list) -> list[dict]:
     """Split a fixed price into milestones (rounding fixed so they sum to the bid)."""
     amounts = [round(total * pct / 100, 2) for pct in split]
@@ -107,9 +117,12 @@ def apply(app: dict, job: dict, filters: dict) -> str:
 
     if result and result.get("errors"):
         msgs = "; ".join(e.get("message", str(e)) for e in result["errors"])
-        raise ApplyError(f"Upwork rejected the request: {msgs}")
+        exc = AlreadyApplied if is_duplicate_error(msgs) else ApplyError
+        raise exc(f"Upwork rejected the request: {msgs}")
 
     data = ((result or {}).get("data") or {}).get("createJobProposal") or {}
     if data.get("status") != "SUCCESS" or not data.get("newProposalId"):
-        raise ApplyError(f"Proposal not created: {data.get('error') or data or 'no response'}")
+        detail = f"{data.get('error') or data or 'no response'}"
+        exc = AlreadyApplied if is_duplicate_error(detail) else ApplyError
+        raise exc(f"Proposal not created: {detail}")
     return str(data["newProposalId"])

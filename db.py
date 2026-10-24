@@ -249,6 +249,19 @@ def list_applications(status: str | None = None, limit: int = 50) -> list[dict]:
         conn.close()
 
 
+def recent_applications(days: int = 14) -> list[dict]:
+    """Non-skipped applications created in the last `days` days (with job_json)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            "SELECT job_id, status, title, job_json FROM applications "
+            "WHERE status != 'skipped' AND created_at >= ?", (cutoff,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def counts_by_status() -> dict:
     conn = _connect()
     try:

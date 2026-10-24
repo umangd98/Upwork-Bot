@@ -274,7 +274,8 @@ class TestPollCycle(McpBase):
         with mock.patch("filters.search_jobs", return_value=jobs), \
              mock.patch("cover_letter.draft", side_effect=flaky_draft), \
              mock.patch("config.load_filters", return_value={**FILTERS}), \
-             mock.patch("notifier.notify_jobs", return_value=0):
+             mock.patch("notifier.notify_jobs", return_value=0), \
+             mock.patch("applied_jobs.refresh", return_value=True):
             scheduler.poll_cycle()
             self.assertEqual(sorted(i["job_id"] for i in self.queue()), ["c1"])    # c3 failed to draft
             self.assertEqual(self.events(), ["queued", "needs_approval"])

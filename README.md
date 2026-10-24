@@ -274,6 +274,17 @@ session is open and idle, expires after 7 days, and a click waits up to one loop
 and return 403 if the secret isn't configured. Button calls pass `?notify=0` so n8n updates the
 original Slack message instead of posting a second one.
 
+### Duplicate protection
+The bot won't apply to the same work twice, in four layers:
+1. **Upwork's proposal list**: each poll loads the jobs this account already applied to (best effort;
+   run `python check_proposals_api.py` to confirm it works for your API key).
+2. **Repost detection**: the same title from the same client (country, lifetime spend, review count)
+   within 14 days of a job already handled is skipped, even under a new job id.
+3. **Upwork's own refusal** (`VJ-JA-10` / "already applied") is recorded as *skipped, already applied*,
+   not as a failure, and doesn't use the daily cap.
+4. The local application table, so a job is never processed twice (note: it is wiped when the
+   container's disk is, see "Known limits").
+
 ### Known limits
 - **Unverified Upwork call**: `applier.py` uses the `createJobProposal` mutation that the Upwork MCP
   exposes. It is not confirmed that this app's API key may call it. A refusal is shown in Slack as
@@ -285,6 +296,9 @@ original Slack message instead of posting a second one.
 - Slack edit boxes hold 3,000 characters; longer letters can't be edited in Slack.
 - n8n can't verify Slack's request signature in this workflow; protect it with the unguessable webhook
   path and the `ALLOWED_USER` check.
+- **Persistence on App Platform**: `data/` (Upwork token, applications, cap counter) is wiped on every
+  deploy or platform restart, after which the bot shows the login page until you sign in again. Keep
+  `AUTO_APPLY_ENABLED=false` until the data lives on a persistent volume (e.g. a droplet).
 - Run the offline tests with `python -m unittest discover -s tests`.
 
 ## Notes

@@ -35,8 +35,8 @@ FILTERS = {"apply": {"daily_cap": 3, "auto_below_budget": 3000, "hourly_bid": 40
 AUTH = {"Authorization": "Bearer s3cret"}
 
 
-def job(jid, amount=None, hourly=None, title="n8n automation"):
-    j = {"id": jid, "title": title, "description": "Build n8n flows. " * 20,
+def job(jid, amount=None, hourly=None, title=None):
+    j = {"id": jid, "title": title or f"n8n automation {jid}", "description": "Build n8n flows. " * 20,
          "job_url": f"https://upwork.test/{jid}", "client": {"location": {"country": "United States"}}}
     if amount is not None:
         j["amount"] = {"rawValue": str(amount), "displayValue": f"{amount:,.0f}"}

@@ -35,6 +35,8 @@ Account: AgileMorph Solutions agency, `org_uid` 648377821962256384 (proposals go
       - the previewed bid or milestone total differs from `params`, or the previewed
         letter differs from `params.cover_letter`;
       - `connects_cost` is above 40.
+      If Upwork refuses because a proposal already exists (VJ-JA-10 / "already applied"), report
+      that error text unchanged: the bot records it as already applied.
       Report with `POST $BOT_URL/api/result/<job_id>` and JSON
       `{"ok": false, "error": "<short reason>", "screening_questions": [...]}`.
    d. Otherwise call `confirm_preview` (type `proposal`) with that preview's id straight
