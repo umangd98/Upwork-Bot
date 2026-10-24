@@ -96,7 +96,7 @@ scoring:
 # -------------------------------------------------------------------
 apply:
   daily_cap: 10               # max proposals in any rolling 24 hours
-  max_per_cycle: 20           # max new jobs drafted per 30-min poll (limits API spend)
+  max_per_cycle: 10           # max new jobs drafted per 30-min poll (limits API spend and Slack flood)
   auto_below_budget: 3000     # fixed jobs under this apply automatically
                               # (3,000 and above wait for your Slack approval)
   hourly_bid: 40              # $/hr we bid on hourly jobs
