@@ -1,12 +1,11 @@
 """
 applier.py — Submits a proposal to Upwork through the GraphQL API.
 
-⚠ UNVERIFIED: the mutation name and input fields below mirror what the Upwork MCP
-reports (createJobProposal → status / error / newProposalId), but Upwork's public
-API may not expose it to this app's API key. Run `python check_apply_api.py` once
-on the deployed bot to find out. If the call is rejected, apply() raises
-ApplyError with Upwork's message; the pipeline shows that in Slack together with
-the job link so nothing is lost.
+The mutation and its input fields were confirmed with `python check_apply_api.py` on
+the deployed bot. Whether this app's token is *authorised* to call it is only known
+after a real submission. If Upwork rejects the call, apply() raises ApplyError with
+Upwork's message; the pipeline shows that in Slack with the job link so nothing is
+lost.
 """
 
 import logging
@@ -23,12 +22,6 @@ _DURATION_IDS = {"less_than_1_month": 4, "1_to_3_months": 3, "3_to_6_months": 2,
 
 class ApplyError(Exception):
     """Raised when Upwork refuses or fails the submission."""
-
-
-def _gql_literal(v) -> str:
-    # Reuse the same inline-literal approach as the search query.
-    from filters import _gql_value
-    return _gql_value(v)
 
 
 def milestones_for(total: float, split: list) -> list[dict]:
@@ -59,7 +52,12 @@ def build_mcp_params(app: dict, job: dict, filters: dict) -> dict:
 
 
 def build_input(app: dict, job: dict, filters: dict) -> dict:
-    """Assemble the createJobProposal input for a stored application."""
+    """
+    The CreateJobProposalInput object (fields confirmed by check_apply_api.py):
+    selectedContractor{id,oDeskUserID}, jobReference, chargedAmount, coverLetter,
+    questions[{question,answer}], sri{percent,frequency}, agencyOrgId, teamOrgId,
+    estimatedDuration (Int), milestones[{amount,description,dueDate}].
+    """
     cfg = filters.get("apply") or {}
     payload = {
         "jobReference": str(job.get("id") or app["job_id"]),
@@ -67,9 +65,15 @@ def build_input(app: dict, job: dict, filters: dict) -> dict:
         "chargedAmount": float(app["bid"]),
         "agencyOrgId": config.UPWORK_AGENCY_ORG_ID,
         "teamOrgId": config.UPWORK_AGENCY_ORG_ID,
+        "sri": {"percent": 0, "frequency": 0},
     }
+    contractor = {}
     if config.UPWORK_FREELANCER_ID:
-        payload["selectedContractor"] = {"id": config.UPWORK_FREELANCER_ID}
+        contractor["id"] = config.UPWORK_FREELANCER_ID
+    if config.UPWORK_FREELANCER_ODESK_ID:
+        contractor["oDeskUserID"] = config.UPWORK_FREELANCER_ODESK_ID
+    if contractor:
+        payload["selectedContractor"] = contractor
 
     is_fixed = (job.get("amount") or {}).get("rawValue") not in (None, "")
     if is_fixed:
@@ -79,19 +83,25 @@ def build_input(app: dict, job: dict, filters: dict) -> dict:
     return payload
 
 
+_MUTATION = """
+mutation CreateJobProposal($input: CreateJobProposalInput!) {
+  createJobProposal(input: $input) {
+    status
+    error
+    newProposalId
+  }
+}
+"""
+
+
 def apply(app: dict, job: dict, filters: dict) -> str:
     """Submit the proposal. Returns the new proposal id or raises ApplyError."""
     payload = build_input(app, job, filters)
-    query = (
-        "mutation {\n"
-        f"  createJobProposal(input: {_gql_literal(payload)}) {{\n"
-        "    status error newProposalId\n"
-        "  }\n"
-        "}"
-    )
     client = get_client()
     try:
-        result = execute_graphql(client, query, {})
+        # Variables (not an inlined literal) so line breaks and quotes in the
+        # cover letter can't break the GraphQL document.
+        result = execute_graphql(client, _MUTATION, {"input": payload})
     except Exception as exc:  # network / SDK errors
         raise ApplyError(f"Upwork request failed: {exc}") from exc
 

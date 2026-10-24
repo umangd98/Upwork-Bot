@@ -46,6 +46,8 @@ ANTHROPIC_MODEL: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5")
 # Which Upwork account proposals go out under (agency org_uid + the freelancer).
 UPWORK_AGENCY_ORG_ID: str = os.getenv("UPWORK_AGENCY_ORG_ID", "")
 UPWORK_FREELANCER_ID: str = os.getenv("UPWORK_FREELANCER_ID", "")
+# The freelancer's Upwork username (the MCP preview showed it as oDeskUserID).
+UPWORK_FREELANCER_ODESK_ID: str = os.getenv("UPWORK_FREELANCER_ODESK_ID", "")
 
 # How approved proposals are submitted:
 #   "api": the bot calls Upwork's GraphQL API itself (needs the app key to allow it)

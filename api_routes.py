@@ -9,6 +9,7 @@ POST /api/letter/<job_id>           body {"letter": "..."} save an edited letter
 POST /api/skip/<job_id>[?notify=0]   mark skipped (button: Skip)
 GET  /api/application/<job_id>      current state in the same shape as an n8n event
 GET  /api/status                    proposals used in the rolling 24h window + queue counts
+GET  /api/applications[?status=]    list applications (skipped ones show the reason)
 GET  /api/queue                     (APPLY_BACKEND=mcp) jobs the Claude session must submit
 POST /api/queue/<job_id>/claim      session claims a job right before submitting
 POST /api/result/<job_id>           session reports {ok, proposal_id | error}
@@ -66,6 +67,15 @@ def status():
     cap = int((_filters().get("apply") or {}).get("daily_cap", 10))
     return jsonify({"applied_in_last_24h": db.applications_in_window(24), "daily_cap": cap,
                     "backend": config.APPLY_BACKEND, "by_status": db.counts_by_status()})
+
+
+@api.get("/applications")
+@_requires_secret
+def applications():
+    """List stored applications, newest first: ?status=pending|skipped|applied|failed|queued&limit=50.
+    Skipped rows include the reason in `error`."""
+    limit = max(1, min(int(request.args.get("limit", 50) or 50), 200))
+    return jsonify({"ok": True, "items": db.list_applications(request.args.get("status"), limit)})
 
 
 @api.get("/queue")

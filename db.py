@@ -233,6 +233,22 @@ def list_by_status(status: str) -> list[dict]:
         conn.close()
 
 
+def list_applications(status: str | None = None, limit: int = 50) -> list[dict]:
+    conn = _connect()
+    try:
+        if status:
+            rows = conn.execute(
+                "SELECT job_id, status, mode, title, bid, error, proposal_id, created_at FROM applications "
+                "WHERE status = ? ORDER BY created_at DESC LIMIT ?", (status, limit)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT job_id, status, mode, title, bid, error, proposal_id, created_at FROM applications "
+                "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def counts_by_status() -> dict:
     conn = _connect()
     try:
